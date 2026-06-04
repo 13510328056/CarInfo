@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.egg
+
+# Data (contains config with AppSecret, etc.)
+data/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp debug files
+test_*.html
+test_*.txt
+baidu_*.html
+thepaper_*.html
+
+# Flask
+instance/
+
+# Environment
+.env
+*.env.local

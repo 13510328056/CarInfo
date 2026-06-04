@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>园区无人车资讯日报系统</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>园区无人车资讯日报系统</h1>
+    <p>本地运行，支持抓取、手动录入、分类、模板导出和公众号格式预览。</p>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-inner">
+        <div>
+          <h2>园区无人车资讯日报助手</h2>
+          <p>本系统支持自动抓取、手动录入、智能分类、公众号格式导出，快速生成可发布的园区无人车资讯日报。</p>
+          <ul class="hero-list">
+            <li>自动抓取多个渠道文章</li>
+            <li>关键词过滤与分类推荐</li>
+            <li>本地保存、可编辑、历史回溯</li>
+            <li>一键生成公众号可复制报告</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>配置管理</h2>
+      <div class="config-grid">
+        <div>
+          <h3>抓取渠道 <span style="font-weight:normal;font-size:12px;color:#888;">（每行一个URL）</span></h3>
+          <textarea id="channels" rows="5" style="width:100%;">https://cn.bing.com/search?q=园区无人车+园区自动驾驶&setlang=zh-Hans
+https://www.baidu.com/s?wd=园区无人车+园区自动驾驶&ie=utf-8
+https://www.sogou.com/sogou?query=园区无人车+自动驾驶&ie=utf8
+https://www.chinabidding.com.cn/search?keyword=无人车
+https://www.bidcenter.com.cn/Search/?keyword=无人车
+https://auto.gasgoo.com/
+https://www.autohome.com.cn/bestauto/
+https://www.d1ev.com/</textarea>
+        </div>
+        <div>
+          <h3>关键词列表 <span style="font-weight:normal;font-size:12px;color:#888;">（每行一个）</span></h3>
+          <textarea id="keywords" rows="5">园区无人车
+园区自动驾驶
+无人接驳车
+巡检
+配送
+环卫
+低速无人车
+自动驾驶 园区
+无人配送车
+接驳车</textarea>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <h3>分类关键词 <span style="font-weight:normal;font-size:12px;color:#888;">（格式：分类名: 关键词1, 关键词2, ...）</span></h3>
+        <textarea id="categories" rows="5" style="width:100%;">政策动态: 政策, 新规, 补贴, 路测, 试点, 规范, 公告, 安全运营
+企业落地: 园区, 上线, 合作, 签约, 落地, 投放, 运营, 项目
+技术动态: 传感器, 调度, 算法, 平台, 车路协同, 续航, 避障, AI
+招标采购: 招标, 中标, 预算, 采购, 公告, 服务需求
+行业观点/海外资讯: 专家, 趋势, 海外, 解读, 观点, 案例, 行业观察</textarea>
+      </div>
+      <div class="button-row">
+        <button id="saveConfig">保存配置</button>
+        <button id="verifyChannelsBtn">验证渠道连通性</button>
+        <button id="resetDefaultChannelsBtn">恢复默认配置</button>
+      </div>
+      <div id="channelStatus" class="status-panel"></div>
+    </section>
+
+    <section class="panel">
+      <h2>自动抓取</h2>
+      <button id="crawlBtn">开始抓取</button>
+      <div id="crawlResult"></div>
+    </section>
+
+    <section class="panel">
+      <h2>手动录入资讯</h2>
+      <div class="form-grid">
+        <label>标题<input id="manualTitle" type="text" /></label>
+        <label>来源<input id="manualSource" type="text" value="手动录入"/></label>
+        <label>发布时间<input id="manualTime" type="text" placeholder="2026-05-18"/></label>
+        <label>分类<select id="manualCategory">
+          <option>政策动态</option>
+          <option>企业落地</option>
+          <option>技术动态</option>
+          <option>招标采购</option>
+          <option>行业观点/海外资讯</option>
+        </select></label>
+      </div>
+      <label>内容<textarea id="manualContent" rows="5"></textarea></label>
+      <button id="addNewsBtn">保存资讯</button>
+    </section>
+
+    <section class="panel">
+      <h2>资讯列表</h2>
+      <div class="button-row" style="margin-bottom:12px;">
+        <button id="refreshNewsBtn">刷新列表</button>
+        <button id="clearNewsBtn" class="btn-danger">🗑 清空列表</button>
+      </div>
+      <div id="newsList"></div>
+    </section>
+
+    <section class="panel">
+      <h2>历史报告</h2>
+      <div class="button-row" style="margin-bottom:12px;">
+        <button id="loadHistoryBtn">加载历史报告</button>
+        <button id="clearHistoryBtn" class="btn-danger">🗑 清空历史</button>
+      </div>
+      <div id="historyList"></div>
+    </section>
+
+    <section class="panel">
+      <h2>导出与预览</h2>
+      <div class="form-grid">
+        <label>格式<select id="exportFormat"><option value="mp" selected>公众号格式</option><option value="text">纯文本</option><option value="html">HTML预览</option></select></label>
+        <label>结尾话术<select id="closingStyle">
+          <option value="0">话术1：每日更新…关注解锁</option>
+          <option value="1">话术2：留言聊聊…重点跟进</option>
+        </select></label>
+        <label>明日关注<input id="attentionText" type="text" placeholder="明日持续关注园区无人车招标及落地动态"/></label>
+      </div>
+      <div class="button-row">
+        <button id="exportBtn">生成报告</button>
+        <button id="copyExportBtn" style="display:none;">一键复制（含格式）</button>
+        <button id="publishBtn" style="display:none;" class="btn-wechat">📤 一键发布到公众号</button>
+      </div>
+      <div id="exportResult"></div>
+      <div id="publishResult" class="status-panel" style="display:none;"></div>
+    </section>
+
+    <section class="panel">
+      <h2>微信公众号配置</h2>
+      <details>
+        <summary>点击配置公众号 API 参数</summary>
+        <div class="config-grid" style="margin-top:12px;">
+          <label>AppID<input id="wechatAppid" type="text" placeholder="公众号 AppID" /></label>
+          <label>AppSecret<input id="wechatSecret" type="password" placeholder="公众号 AppSecret" /></label>
+          <label>公众号名称<input id="wechatName" type="text" placeholder="如：园区无人车资讯" /></label>
+        </div>
+        <button id="saveWechatConfig">保存公众号配置</button>
+        <span id="wechatConfigStatus" class="config-status"></span>
+      </details>
+      <div class="status-panel" style="margin-top:12px;color:#555;">
+        <strong>💡 发布流程：</strong><br/>
+        ① 填好上方 AppID / AppSecret → ②「导出与预览」点击「生成报告」→ ③ 预览满意后点击「一键发布到公众号」
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>访问 http://localhost:5000 启动页面。运行前请先执行 setup.bat 或 start.ps1。</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
