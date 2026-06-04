@@ -28,25 +28,147 @@
 
 ### 前置条件
 
-- 安装 [Docker](https://docs.docker.com/get-docker/)
-- 安装 [Docker Compose](https://docs.docker.com/compose/install/)（Docker Desktop 已内置）
+目标设备需安装：
 
-### 启动服务
+- [Docker](https://docs.docker.com/get-docker/)（版本 24.0+）
+- [Docker Compose](https://docs.docker.com/compose/install/)（Docker Desktop 已内置，Linux 需单独安装）
+- [Git](https://git-scm.com/downloads)
+
+验证安装：
 
 ```bash
-# 构建并启动
-docker compose up -d
+docker --version
+docker compose version
+git --version
+```
 
-# 查看日志
+### 部署步骤
+
+**1. 克隆仓库到目标设备**
+
+```bash
+git clone https://github.com/13510328056/CarInfo.git
+cd CarInfo
+```
+
+> 如果目标设备没有公网访问权限，可通过 `git pull` 在有网络的设备上拉取后，用 U 盘等介质拷贝到目标设备。
+
+**2. 编写配置文件（首次必须）**
+
+```bash
+# 创建 data 目录
+mkdir -p data
+
+# 创建配置文件（默认配置可运行，发布微信需填写 AppID/AppSecret）
+cat > data/config.json << 'CONFIG'
+{
+  "wechat": {
+    "appid": "",
+    "appsecret": "",
+    "name": ""
+  }
+}
+CONFIG
+```
+
+也可不手动创建，启动系统后在浏览器页面中配置微信公众号参数。
+
+**3. 构建并启动**
+
+```bash
+docker compose up -d
+```
+
+首次执行会自动构建镜像，耗时约 2-5 分钟（取决于网络）。后续启动秒级完成。
+
+**4. 确认运行状态**
+
+```bash
+# 查看容器状态
+docker ps
+
+# 查看实时日志
 docker compose logs -f
+
+# 测试 HTTP 响应
+curl http://localhost:5000
+```
+
+**5. 打开浏览器**
+
+访问 `http://目标设备IP:5000`
+
+### 常用命令
+
+```bash
+# 启动服务（后台）
+docker compose up -d
 
 # 停止服务
 docker compose down
+
+# 重启服务
+docker compose restart
+
+# 查看日志（实时）
+docker compose logs -f
+
+# 查看日志（最近 100 行）
+docker compose logs --tail=100
+
+# 重新构建镜像并启动（代码更新后执行）
+git pull
+docker compose up -d --build
 ```
 
-打开浏览器访问 `http://localhost:5000`
+### 更新到最新版本
+
+```bash
+cd CarInfo
+git pull                     # 拉取最新代码
+docker compose up -d --build # 重新构建并启动
+```
 
 ### 数据持久化
+
+系统数据存储在 `data/` 目录中，通过 Docker volume 挂载到容器内：
+
+```yaml
+volumes:
+  - ./data:/app/data
+```
+
+该目录包含：
+- `config.json` — 抓取渠道、关键词、模板、微信配置等
+- `news.json` — 所有抓取和录入的资讯数据
+- `history.json` — 历史报告存档
+
+**备份数据**只需复制整个 `data/` 目录；**迁移到新设备**时复制 `data/` 目录到新项目的相同位置即可。
+
+### 网络与防火墙
+
+如需从其他设备访问（如手机预览），确保目标设备防火墙放行 5000 端口：
+
+```bash
+# Linux (firewalld)
+firewall-cmd --add-port=5000/tcp --permanent
+firewall-cmd --reload
+
+# Linux (iptables)
+iptables -A INPUT -p tcp --dport 5000 -j ACCEPT
+
+# Windows
+netsh advfirewall firewall add rule name="CarInfo" dir=in action=allow protocol=TCP localport=5000
+```
+
+### 微信公众号 IP 白名单
+
+如需一键发布到公众号，需将 **部署设备的公网 IP** 添加到微信公众号后台：
+
+1. 登录 [mp.weixin.qq.com](https://mp.weixin.qq.com/)
+2. 进入 **设置 → 安全中心 → IP白名单**
+3. 添加部署设备的公网 IP（可通过 `curl ifconfig.me` 或 `curl ip.sb` 查询）
+4. 点击保存
 
 系统数据存储在 `data/` 目录中，通过 Docker volume 挂载到容器内：
 
