@@ -1,243 +1,164 @@
-# 园区无人车每日资讯日报系统
+# 资讯日报助手
 
-一个本地运行的园区无人车垂直领域资讯日报生成系统，支持自动抓取、手动录入、智能分类、模板导出和公众号格式预览。
+一个本地运行的通用资讯日报生成系统。支持多渠道资讯抓取（网页搜索 + RSS 订阅）、智能分类、分页检索、报告生成与微信公众号一键发布。
+
+---
+
+## 快速启动
+
+### 方式一：Docker 部署
+
+```bash
+git clone https://github.com/13510328056/CarInfo.git
+cd CarInfo
+docker compose up -d
+# 访问 http://localhost:5000
+```
+
+### 方式二：本地运行
+
+```bash
+pip install -r requirements.txt
+python app.py
+# 访问 http://localhost:5000
+```
+
+---
+
+## 功能概览
+
+### 4 步工作流
+
+| 步骤 | 功能 | 说明 |
+|------|------|------|
+| ① 内容源设置 | 网页渠道 + RSS 订阅 | 配置抓取来源，支持 OPML 批量导入（20+ 源） |
+| ② 过滤配置 | 分类关键词 | 5 大板块，中英文双语关键词，匹配即分类 |
+| ③ 抓取资讯 | 并行抓取 + 验证 | 网页 8 线程 RSS 并行，验证连通性 |
+| ④ 内容管理与发布 | 编辑 + 分页 + 导出 | 列表分页/搜索，4 种格式报告，一键微信发布 |
+
+### 内容源
+
+| 类型 | 说明 | 验证 |
+|------|------|------|
+| **网页渠道** | 搜索引擎、行业站点、新闻列表页 | HTTP 状态 + 反爬检测 + 关键词匹配度 |
+| **RSS 订阅** | 标准 RSS 2.0 / Atom Feed | XML 可解析性 + Feed 标题 + 条目数 |
+| **OPML 导入** | 首次启动 `rss_sources` 为空时自动加载 `AV_Feeds.opml` | — |
+
+### 分类体系（5 大板块）
+
+| 分类 | 中文关键词 | 英文关键词 |
+|------|-----------|-----------|
+| 政策动态 | 政策, 新规, 补贴, 路测, 试点... | regulation, policy, legislation, NHTSA... |
+| 企业落地 | 园区, 上线, 合作, 签约, 落地... | launch, deploy, partnership, commercial... |
+| 技术动态 | 传感器, 调度, 算法, 车路协同... | LiDAR, radar, deep learning, V2X... |
+| 招标采购 | 招标, 中标, 预算, 采购... | tender, bid, procurement, RFP... |
+| 行业观点/海外资讯 | 专家, 趋势, 海外, 解读... | analysis, opinion, report, forecast... |
+
+> 分类基于关键词子串匹配，非 NLP 模型，中英文均支持。
+
+### 报告生成
+
+| 格式 | 用途 |
+|------|------|
+| 公众号格式 (mp) | 微信公众号草稿箱（内联样式 + data-src 图片） |
+| 纯文本 | Markdown 风格文字报告 |
+| HTML 预览 | 网页端预览（白色背景 + 圆角卡片） |
+
+### 资讯管理
+
+- **分页显示**：每页 10 条，带数字页码（最多 7 个）
+- **实时搜索**：250ms 防抖，匹配标题/来源/内容/分类
+- **编辑/删除**：每条可修改或删除
+- **历史归档**：已生成报告按日期存档，支持回溯
+
+### 微信公众号发布
+
+1. 配置 AppID / AppSecret
+2. 生成报告预览
+3. 一键发布到草稿箱
+4. 登录 [mp.weixin.qq.com](https://mp.weixin.qq.com/) → 草稿箱 → 发布
+
+> 需将服务器公网 IP 添加到微信公众号后台 IP 白名单。
+
+---
 
 ## 目录结构
 
 ```
-├── app.py              # Flask 本地服务，提供 REST API
-├── services.py         # 资讯抓取、分类、报告生成核心逻辑
-├── storage.py          # 本地 JSON 文件存储管理
-├── wechat.py           # 微信公众号 API 客户端
+├── app.py              # Flask 服务 + REST API（18 个端点）
+├── services.py         # 抓取/分类/报告/OPML/RSS 验证核心逻辑
+├── storage.py          # JSON 文件存储管理
+├── wechat.py           # 微信公众号 API 客户端（token/素材/草稿）
 ├── requirements.txt    # Python 依赖
-├── Dockerfile          # Docker 构建文件
-├── docker-compose.yml  # Docker Compose 配置
+├── AV_Feeds.opml       # RSS 订阅清单（20 个自动驾驶相关源）
+├── Dockerfile
+├── docker-compose.yml
+├── docs/
+│   └── requirements.md # 详细需求说明书
 ├── static/
-│   ├── index.html      # 前端页面
-│   ├── app.js          # 前端交互逻辑
-│   ├── style.css       # 前端样式
-│   └── thumbnail.png   # 公众号默认封面缩略图
-├── data/               # 自动生成的本地配置和资讯数据（已 gitignore）
-├── templates/          # Flask 模板目录（预留）
-├── .gitignore
-├── CLAUDE.md           # 项目开发规范与说明
-└── 园区无人车每日资讯报告系统软件需求说明书.md
+│   ├── index.html      # 前端页面（4 步工作流 + sheet 标签）
+│   ├── app.js          # 前端交互逻辑（分页/搜索/验证/发布）
+│   ├── style.css       # 深色科技风 UI（玻璃拟态卡片）
+│   └── thumbnail.png   # 公众号默认封面
+├── data/               # 自动生成的配置/资讯/历史数据（已 gitignore）
+├── memory/             # 开发交互记录
+├── CLAUDE.md           # 项目规范
 ```
 
-## 快速启动（Docker）
-
-### 前置条件
-
-目标设备需安装：
-
-- [Docker](https://docs.docker.com/get-docker/)（版本 24.0+）
-- [Docker Compose](https://docs.docker.com/compose/install/)（Docker Desktop 已内置，Linux 需单独安装）
-- [Git](https://git-scm.com/downloads)
-
-验证安装：
-
-```bash
-docker --version
-docker compose version
-git --version
-```
-
-### 部署步骤
-
-**1. 克隆仓库到目标设备**
-
-```bash
-  git clone https://github.com/13510328056/CarInfo.git
-cd CarInfo
-```
-
-> 如果目标设备没有公网访问权限，可通过 `git pull` 在有网络的设备上拉取后，用 U 盘等介质拷贝到目标设备。
-
-**2. 编写配置文件（首次必须）**
-
-```bash
-# 创建 data 目录
-mkdir -p data
-
-# 创建配置文件（默认配置可运行，发布微信需填写 AppID/AppSecret）
-cat > data/config.json << 'CONFIG'
-{
-  "wechat": {
-    "appid": "",
-    "appsecret": "",
-    "name": ""
-  }
-}
-CONFIG
-```
-
-也可不手动创建，启动系统后在浏览器页面中配置微信公众号参数。
-
-**3. 构建并启动**
-
-```bash
-docker compose up -d
-```
-
-首次执行会自动构建镜像，耗时约 2-5 分钟（取决于网络）。后续启动秒级完成。
-
-**4. 确认运行状态**
-
-```bash
-# 查看容器状态
-docker ps
-
-# 查看实时日志
-docker compose logs -f
-
-# 测试 HTTP 响应
-curl http://localhost:5000
-```
-
-**5. 打开浏览器**
-
-访问 `http://目标设备IP:5000`
-
-### 常用命令
-
-```bash
-# 启动服务（后台）
-docker compose up -d
-
-# 停止服务
-docker compose down
-
-# 重启服务
-docker compose restart
-
-# 查看日志（实时）
-docker compose logs -f
-
-# 查看日志（最近 100 行）
-docker compose logs --tail=100
-
-# 重新构建镜像并启动（代码更新后执行）
-git pull
-docker compose up -d --build
-```
-
-### 更新到最新版本
-
-```bash
-cd CarInfo
-git pull                     # 拉取最新代码
-docker compose up -d --build # 重新构建并启动
-```
-
-### 数据持久化
-
-系统数据存储在 `data/` 目录中，通过 Docker volume 挂载到容器内：
-
-```yaml
-volumes:
-  - ./data:/app/data
-```
-
-该目录包含：
-- `config.json` — 抓取渠道、关键词、模板、微信配置等
-- `news.json` — 所有抓取和录入的资讯数据
-- `history.json` — 历史报告存档
-
-**备份数据**只需复制整个 `data/` 目录；**迁移到新设备**时复制 `data/` 目录到新项目的相同位置即可。
-
-### 网络与防火墙
-
-如需从其他设备访问（如手机预览），确保目标设备防火墙放行 5000 端口：
-
-```bash
-# Linux (firewalld)
-firewall-cmd --add-port=5000/tcp --permanent
-firewall-cmd --reload
-
-# Linux (iptables)
-iptables -A INPUT -p tcp --dport 5000 -j ACCEPT
-
-# Windows
-netsh advfirewall firewall add rule name="CarInfo" dir=in action=allow protocol=TCP localport=5000
-```
-
-### 微信公众号 IP 白名单
-
-如需一键发布到公众号，需将 **部署设备的公网 IP** 添加到微信公众号后台：
-
-1. 登录 [mp.weixin.qq.com](https://mp.weixin.qq.com/)
-2. 进入 **设置 → 安全中心 → IP白名单**
-3. 添加部署设备的公网 IP（可通过 `curl ifconfig.me` 或 `curl ip.sb` 查询）
-4. 点击保存
-
-系统数据存储在 `data/` 目录中，通过 Docker volume 挂载到容器内：
-
-```yaml
-volumes:
-  - ./data:/app/data
-```
-
-首次启动后自动生成 `data/config.json` 和 `data/news.json`，重启容器数据不丢失。
-
-### 更新到最新版本
-
-```bash
-git pull
-docker compose up -d --build
-```
-
-## 功能概览
-
-- **自动抓取**：从搜索引擎、行业站点和主流媒体（澎湃新闻等）抓取园区无人车相关资讯
-- **手动录入**：补充非抓取类资讯，支持分类选择
-- **智能分类**：基于关键词匹配的自动分类（5大板块）
-- **内容编辑**：资讯列表查看、编辑、删除
-- **模板导出**：一键生成专业卡片风格的公众号适配报告
-- **一键发布**：配置微信公众号 AppID/AppSecret 后，直接发布到公众号草稿箱
-- **渠道验证**：测试抓取渠道的连通性和内容可解析性
-- **历史归档**：按日期存档已生成的报告，支持回溯
-
-### 资讯分类体系
-
-| 板块 | 覆盖内容 |
-|------|---------|
-| 政策动态 | 园区自动驾驶新规、路测开放、试点政策、补贴等 |
-| 企业落地 | 无人车上线、项目签约、运营合作等 |
-| 技术动态 | 传感器、调度平台、车路协同、算法等 |
-| 招标采购 | 项目招标、中标公告、预算等 |
-| 行业观点/海外资讯 | 专家解读、海外案例、趋势分析等 |
-
-## 微信公众号发布
-
-1. 打开系统页面 → **微信公众号配置** → 填写 AppID / AppSecret / 公众号名称
-2. **导出与预览** → 点击「生成报告」预览效果
-3. 预览满意后点击「📤 一键发布到公众号」
-4. 登录 [mp.weixin.qq.com](https://mp.weixin.qq.com/) → 草稿箱 查看和发布
-
-> ⚠️ 发布前需将服务器的公网 IP 添加到微信公众号后台的 IP 白名单（设置 → 安全中心 → IP白名单）
+---
 
 ## API 接口
 
-| 方法 | 路径 | 说明 |
+| 方法 | 路径 | 功能 |
 |------|------|------|
-| GET | /api/config | 获取配置 |
-| POST | /api/config | 保存配置 |
-| GET | /api/news | 获取资讯列表 |
-| POST | /api/news | 手动录入资讯 |
-| PUT/DELETE | /api/news/<id> | 更新/删除资讯 |
-| POST | /api/news/crawl | 自动抓取资讯 |
-| POST | /api/news/clear | 清空资讯列表 |
-| POST | /api/channels/verify | 验证渠道连通性 |
-| POST | /api/news/classify | 资讯自动分类 |
-| POST | /api/export | 导出报告 |
-| POST | /api/wechat/publish | 发布到公众号草稿箱 |
+| GET | /api/config | 获取配置（rss_sources 为空时自动从 OPML 导入） |
+| POST | /api/config | 更新配置 |
+| GET | /api/news | 获取全部资讯 |
+| POST | /api/news | 手动录入 |
+| PUT/DELETE | /api/news/\<id\> | 编辑/删除单条 |
+| POST | /api/news/crawl | 抓取（网页 + RSS 并行） |
+| POST | /api/news/clear | 清空全部 |
+| POST | /api/news/classify | 文本分类 |
+| POST | /api/channels/verify | 验证网页渠道连通性 |
+| POST | /api/rss/verify | 验证 RSS 源连通性 |
+| POST | /api/rss/remove | 删除 RSS 源 |
+| POST | /api/rss/import-opml | 从 OPML 导入订阅源 |
+| POST | /api/export | 生成报告（4 种格式） |
+| POST | /api/wechat/publish | 发布到微信公众号草稿箱 |
 | GET/DELETE | /api/history | 获取/清空历史报告 |
 | POST | /api/template/reset | 恢复默认模板 |
 
+---
+
 ## 技术栈
 
-- **后端**：Python + Flask
-- **前端**：原生 HTML + CSS + JavaScript (Fetch API)
-- **数据存储**：本地 JSON 文件
-- **抓取**：requests + BeautifulSoup4 + lxml
-- **部署**：Docker / Docker Compose
+| 层 | 技术 |
+|----|------|
+| 后端 | Python 3.14 + Flask 3 |
+| 前端 | 原生 HTML5 / CSS3 (Glassmorphism) / JavaScript ES6+ |
+| 存储 | 本地 JSON 文件 |
+| 网页抓取 | requests + BeautifulSoup 4 + lxml |
+| RSS 抓取 | feedparser + ThreadPoolExecutor（8 并发） |
+| 部署 | Docker / Docker Compose |
+
+---
+
+## 数据持久化
+
+```
+data/
+├── config.json   # 渠道/关键词/分类/模板/微信配置
+├── news.json     # 所有资讯条目
+└── history.json  # 历史报告存档
+```
+
+备份或迁移只需复制整个 `data/` 目录。
+
+---
+
+## 微信公众号配置
+
+1. 在 [mp.weixin.qq.com](https://mp.weixin.qq.com/) 获取 AppID 和 AppSecret
+2. 在页面 **④ 导出发布 → 微信公众号配置** 中填写
+3. 将服务器 IP 加入微信公众号 IP 白名单
+4. 生成报告 → 一键发布到草稿箱
