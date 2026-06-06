@@ -1,8 +1,9 @@
 from datetime import datetime
+from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-from services import build_report_html, build_report_mp, build_report_mp_html, build_report_text, classify_news, crawl_channels, verify_channel
+from services import build_report_html, build_report_mp, build_report_mp_html, build_report_text, classify_news, crawl_channels, crawl_rss_feeds, parse_opml, verify_channel, verify_rss_feed
 from storage import (
     add_news_item,
     archive_report,
@@ -35,7 +36,15 @@ def api_config():
         config.update(data)
         save_config(config)
         return jsonify({"success": True, "data": config})
-    return jsonify({"success": True, "data": get_config()})
+    config = get_config()
+    # 若 rss_sources 为空，自动从 AV_Feeds.opml 加载
+    if not config.get("rss_sources") and OPML_PATH.exists():
+        from services import parse_opml
+        feeds = parse_opml(str(OPML_PATH))
+        if feeds:
+            config["rss_sources"] = [url for _, url in feeds]
+            save_config(config)
+    return jsonify({"success": True, "data": config})
 
 
 @app.route("/api/news", methods=["GET", "POST"])
@@ -91,16 +100,29 @@ def api_crawl():
     if not payload:
         return jsonify({"success": False, "message": "缺少抓取参数"}), 400
     channel_urls = payload.get("channel_urls") or get_config().get("channels", [])
+    rss_urls = payload.get("rss_urls") or get_config().get("rss_sources", [])
     keywords = payload.get("keywords") or get_config().get("keywords", [])
     category_keywords = payload.get("category_keywords") or get_config().get("categories", {})
     time_range = payload.get("time_range")
     try:
+        # 1. 网页爬取（原有逻辑，用 keywords 过滤）
         result = crawl_channels(channel_urls, keywords, category_keywords, time_range)
+        # 2. RSS 抓取（不额外关键词过滤，仅做全局分类）
+        rss_result = crawl_rss_feeds(rss_urls, category_keywords, time_range)
     except Exception as e:
         return jsonify({"success": False, "message": f"抓取失败: {str(e)}"}), 500
+
+    # 合并 & URL 去重（优先保留网页爬取结果，RSS 内容可能被截断）
+    all_results = list(result["results"])
+    seen_urls = {item.get("url") for item in all_results}
+    for item in rss_result["results"]:
+        if item.get("url") and item["url"] not in seen_urls:
+            all_results.append(item)
+            seen_urls.add(item["url"])
+
     existing_urls = {item.get("url") for item in get_news_list()}
     added_items = []
-    for item in result["results"]:
+    for item in all_results:
         if item.get("url") and item["url"] not in existing_urls:
             item_data = {
                 "id": generate_news_id(),
@@ -117,10 +139,12 @@ def api_crawl():
             add_news_item(item_data)
             added_items.append(item_data)
             existing_urls.add(item["url"])
-    return jsonify({"success": True, "data": result["results"], "added_count": len(added_items), "crawl_info": {
+    return jsonify({"success": True, "data": all_results, "added_count": len(added_items), "crawl_info": {
         "total": result["total"],
         "succeeded": result["succeeded"],
-        "details": result["details"]
+        "details": result["details"],
+        "rss_total": rss_result["total"],
+        "rss_errors": rss_result["errors"]
     }})
 
 
@@ -141,6 +165,76 @@ def api_verify_channels():
     return jsonify({"success": True, "data": results, "summary": {
         "total": len(results), "ok": ok_count, "weak": weak_count, "fail": fail_count
     }})
+
+
+OPML_PATH = Path(__file__).parent / "AV_Feeds.opml"
+
+
+@app.route("/api/rss/import-opml", methods=["POST"])
+def api_import_opml():
+    """Parse AV_Feeds.opml and import all feed URLs into config.rss_sources."""
+    if not OPML_PATH.exists():
+        return jsonify({"success": False, "message": f"OPML 文件不存在: {OPML_PATH}"}), 404
+
+    feeds = parse_opml(str(OPML_PATH))
+    if not feeds:
+        return jsonify({"success": False, "message": "OPML 文件中未找到有效的 RSS 订阅源"}), 400
+
+    config = get_config()
+    # 合并：保留已有 + 新增（去重）
+    existing = set(config.get("rss_sources", []))
+    new_sources = []
+    imported = []
+    for title, url in feeds:
+        is_new = url not in existing
+        imported.append({"title": title, "url": url, "new": is_new})
+        if is_new:
+            existing.add(url)
+            new_sources.append(url)
+
+    if new_sources:
+        config["rss_sources"] = list(existing)
+        save_config(config)
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "total": len(feeds),
+            "imported": imported,
+            "new_added": len(new_sources),
+            "rss_sources": list(existing),
+        }
+    })
+
+
+@app.route("/api/rss/verify", methods=["POST"])
+def api_rss_verify():
+    """Test connectivity and parseability of RSS feeds."""
+    payload = request.get_json(force=True)
+    urls = payload.get("urls", []) if payload else []
+    if not urls:
+        return jsonify({"success": False, "message": "缺少 RSS URL"}), 400
+    results = [verify_rss_feed(url) for url in urls]
+    ok = sum(1 for r in results if r["status"] == "ok")
+    fail = sum(1 for r in results if r["status"] == "fail")
+    return jsonify({"success": True, "data": results, "summary": {"total": len(results), "ok": ok, "fail": fail}})
+
+
+@app.route("/api/rss/remove", methods=["POST"])
+def api_rss_remove():
+    """Remove an RSS feed URL from the config."""
+    payload = request.get_json(force=True)
+    url_to_remove = (payload.get("url") or "").strip() if payload else ""
+    if not url_to_remove:
+        return jsonify({"success": False, "message": "缺少 RSS URL"}), 400
+    config = get_config()
+    sources = config.get("rss_sources", [])
+    if url_to_remove not in sources:
+        return jsonify({"success": False, "message": "未找到该 RSS 源"}), 404
+    sources.remove(url_to_remove)
+    config["rss_sources"] = sources
+    save_config(config)
+    return jsonify({"success": True, "data": {"rss_sources": sources}})
 
 
 @app.route("/api/news/classify", methods=["POST"])

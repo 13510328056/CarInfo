@@ -47,7 +47,7 @@ git --version
 **1. 克隆仓库到目标设备**
 
 ```bash
-git clone https://github.com/13510328056/CarInfo.git
+  git clone https://github.com/13510328056/CarInfo.git
 cd CarInfo
 ```
 

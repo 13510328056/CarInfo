@@ -37,11 +37,21 @@ DEFAULT_CONFIG = {
         "自动驾驶"
     ],
     "categories": {
-        "政策动态": ["政策", "新规", "补贴", "路测", "试点", "规范", "公告", "安全运营"],
-        "企业落地": ["园区", "上线", "合作", "签约", "落地", "投放", "运营", "项目"],
-        "技术动态": ["传感器", "调度", "算法", "平台", "车路协同", "续航", "避障", "AI"],
-        "招标采购": ["招标", "中标", "预算", "采购", "公告", "服务需求"],
-        "行业观点/海外资讯": ["专家", "趋势", "海外", "解读", "观点", "案例", "行业观察"]
+        "政策动态": ["政策", "新规", "补贴", "路测", "试点", "规范", "公告", "安全运营",
+                    "regulation", "policy", "legislation", "regulatory", "permit", "approval",
+                    "certification", "NHTSA", "safety standard", "government", "legal", "law"],
+        "企业落地": ["园区", "上线", "合作", "签约", "落地", "投放", "运营", "项目",
+                    "launch", "deploy", "partnership", "rollout", "commercial", "pilot",
+                    "investment", "funding", "service", "delivery", "operation"],
+        "技术动态": ["传感器", "调度", "算法", "平台", "车路协同", "续航", "避障", "AI",
+                    "LiDAR", "radar", "computer vision", "deep learning", "perception",
+                    "HD map", "V2X", "connectivity", "chip", "SoC", "software", "simulation",
+                    "neural network", "sensor", "algorithm", "transformer", "OTA"],
+        "招标采购": ["招标", "中标", "预算", "采购", "公告", "服务需求",
+                    "tender", "bid", "procurement", "contract", "RFP", "vendor", "supplier"],
+        "行业观点/海外资讯": ["专家", "趋势", "海外", "解读", "观点", "案例", "行业观察",
+                        "analysis", "opinion", "report", "forecast", "market", "research",
+                        "insight", "survey", "outlook", "trend"]
     },
     "template": {
         "title_format": "园区无人车日报·{date}｜{highlights}",
@@ -61,7 +71,10 @@ DEFAULT_CONFIG = {
             "留言区聊聊你最关注的园区无人车场景（接驳/巡检/配送），后续将重点跟进相关资讯！"
         ],
         "closing_selected": 0
-    }
+    },
+    "rss_sources": [
+        "https://www.autonews.com/arc/outboundfeeds/rss/"
+    ]
 }
 
 DEFAULT_NEWS = []
@@ -95,7 +108,8 @@ def get_config():
         "keywords": config.get("keywords") if isinstance(config.get("keywords"), list) and config.get("keywords") else list(DEFAULT_CONFIG["keywords"]),
         "categories": dict(config.get("categories") or DEFAULT_CONFIG["categories"]),
         "template": {**DEFAULT_CONFIG["template"], **(config.get("template") or {})},
-        "wechat": dict(config.get("wechat") or {})
+        "wechat": dict(config.get("wechat") or {}),
+        "rss_sources": config.get("rss_sources") if isinstance(config.get("rss_sources"), list) else list(DEFAULT_CONFIG["rss_sources"])
     }
 
 

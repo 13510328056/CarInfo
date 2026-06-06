@@ -1,9 +1,14 @@
 import json
 import random
 import re
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from html import unescape
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+import feedparser
 import requests
 from bs4 import BeautifulSoup, FeatureNotFound
 
@@ -577,6 +582,161 @@ def verify_channel(url: str, keywords: list) -> dict:
     return result
 
 
+
+
+# ─── RSS / OPML 支持 ────────────────────────────────────────────────────────
+
+
+def _strip_html_tags(text: str) -> str:
+    """Remove HTML tags from RSS summary/description and unescape entities."""
+    if not text:
+        return ""
+    clean = re.sub(r'<[^>]+>', '', text)
+    return unescape(clean)
+
+
+def _rss_date_to_str(struct_time) -> str:
+    """Convert feedparser time.struct_time to 'YYYY年M月D日' format."""
+    if not struct_time:
+        return ""
+    try:
+        return f"{struct_time.tm_year}年{struct_time.tm_mon}月{struct_time.tm_mday}日"
+    except (AttributeError, ValueError):
+        return ""
+
+
+def parse_opml(filepath: str) -> list:
+    
+    feeds = []
+    try:
+        tree = ET.parse(filepath)
+        root = tree.getroot()
+    except (ET.ParseError, FileNotFoundError, Exception) as e:
+        print(f"[parse_opml] fail: {e}")
+        return feeds
+    body = root.find("body")
+    if body is None:
+        return feeds
+    def _walk(parent):
+        for child in parent:
+            tag = child.tag.lower() if child.tag else ""
+            if tag == "outline":
+                url = (child.get("xmlUrl") or "").strip()
+                txt = (child.get("text") or child.get("title") or "").strip()
+                if url and (url.startswith("http://") or url.startswith("https://")):
+                    feeds.append((txt, url))
+                _walk(child)
+    _walk(body)
+    seen = set()
+    result = []
+    for t, u in feeds:
+        if u not in seen:
+            seen.add(u)
+            result.append((t, u))
+    return result
+
+
+def _fetch_single_feed(url: str, category_keywords: dict, time_range: dict, timeout: int = 20) -> list:
+    
+    articles = []
+    try:
+        resp = requests.get(url, headers=_random_headers(), timeout=timeout)
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
+        if feed.bozo and not feed.entries:
+            return []
+        feed_title = feed.feed.get("title", "") or extract_source(url)
+        for entry in feed.entries:
+            title = normalize_text(entry.get("title", ""))
+            link = entry.get("link", "")
+            if not title or not link:
+                continue
+            raw = entry.get("summary", "") or entry.get("description", "")
+            content = _strip_html_tags(raw)
+            pub_struct = entry.get("published_parsed") or entry.get("updated_parsed")
+            publish_time = _rss_date_to_str(pub_struct)
+            if time_range and publish_time and not _is_within_time_range(publish_time, time_range):
+                continue
+            source = feed_title or extract_source(link)
+            image_url = ""
+            if "media_content" in entry:
+                for media in entry.media_content:
+                    mt = media.get("type", "")
+                    md = media.get("medium", "")
+                    if md == "image" or mt.startswith("image/"):
+                        image_url = media.get("url", "")
+                        break
+            if not image_url and "links" in entry:
+                for lnk in entry.links:
+                    if lnk.get("rel") == "enclosure" and lnk.get("type", "").startswith("image/"):
+                        image_url = lnk.get("href", "")
+                        break
+            if not image_url and "media_thumbnail" in entry:
+                thumb = entry.media_thumbnail
+                if isinstance(thumb, list) and thumb:
+                    image_url = thumb[0].get("url", "")
+            category = "行业观点/海外资讯"
+            if category_keywords:
+                category, _ = classify_news(title, content, category_keywords)
+            articles.append({
+                "title": title, "source": source, "publish_time": publish_time,
+                "content": content[:500], "image_url": image_url,
+                "keyword_match": 0, "url": link, "category": category, "_from_rss": True,
+            })
+    except Exception:
+        pass
+    return articles
+
+
+def crawl_rss_feeds(rss_urls: list, category_keywords: dict = None, time_range: dict = None, max_workers: int = 8) -> dict:
+    
+    results = []
+    errors = []
+    total = len(rss_urls)
+    if not rss_urls:
+        return {"results": [], "errors": [], "total": 0}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        fut_map = {}
+        for url in rss_urls:
+            fut = pool.submit(_fetch_single_feed, url, category_keywords, time_range)
+            fut_map[fut] = url
+        for fut in as_completed(fut_map):
+            url = fut_map[fut]
+            try:
+                arts = fut.result()
+                if arts:
+                    results.extend(arts)
+            except Exception as exc:
+                errors.append({"url": url, "error": str(exc)[:100]})
+    return {"results": results, "errors": errors, "total": total}
+
+
+def verify_rss_feed(url: str, timeout: int = 15) -> dict:
+    
+    result = {"url": url, "status": "fail", "feed_title": "", "entry_count": 0, "status_code": None, "error": ""}
+    try:
+        resp = requests.get(url, headers=_random_headers(), timeout=timeout)
+        result["status_code"] = resp.status_code
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
+        if feed.bozo and not feed.entries:
+            result["error"] = f"XML parse error: {feed.bozo_exception}"
+            return result
+        result["feed_title"] = feed.feed.get("title", "") or extract_source(url)
+        result["entry_count"] = len(feed.entries)
+        result["status"] = "ok"
+        if feed.entries:
+            result["last_title"] = normalize_text(feed.entries[0].get("title", ""))[:60]
+        if hasattr(feed.feed, "updated_parsed") and feed.feed.updated_parsed:
+            from time import mktime
+            from datetime import datetime as dt
+            result["last_update"] = dt.fromtimestamp(mktime(feed.feed.updated_parsed)).strftime("%Y-%m-%d %H:%M")
+    except requests.Timeout:
+        result["error"] = "timeout (15s)"
+    except Exception as e:
+        result["error"] = str(e)[:60]
+    return result
 CATEGORY_EMOJI = {
     "政策动态": "\U0001f4cb",       # 📋
     "企业落地": "\U0001f697",       # 🚗
@@ -861,9 +1021,9 @@ def _html_img(img_url: str, alt: str = "") -> str:
         return ""
     return (f'<div style="margin:8px 0;border-radius:10px;overflow:hidden;'
             f'background:#f5f7fa;text-align:center;">'
-            f'<img src="{_html_escape(img_url)}" alt="{_html_escape(alt)}" '
+            f'<img data-src="{_html_escape(img_url)}" alt="{_html_escape(alt)}" '
             f'style="width:100%;max-width:100%;display:block;object-fit:cover;'
-            f'max-height:300px;" loading="lazy" /></div>')
+            f'max-height:300px;" /></div>')
 
 
 def build_report_mp_html(news_items: list, template: dict,
@@ -993,8 +1153,7 @@ def build_report_mp_html(news_items: list, template: dict,
                 )
             if item_url:
                 meta_parts_inner.append(
-                    f'<a href="{_html_escape(item_url)}" target="_blank" '
-                    f'rel="noreferrer" style="font-size:12px;color:#1a6b9e;'
+                    f'<a href="{_html_escape(item_url)}" style="font-size:12px;color:#1a6b9e;'
                     f'text-decoration:none;border-bottom:1px solid #c8daf0;">'
                     f'📎 {_html_escape(short_link)}</a>'
                 )
@@ -1084,7 +1243,7 @@ def build_report_text(news_items: list, template: dict, attention_text: str = "�
 
 def build_report_html(news_items: list, template: dict, attention_text: str = "明日持续关注园区无人车招标及落地动态") -> str:
     text = build_report_text(news_items, template, attention_text)
-    html_parts = ['<div style="font-family: Arial, sans-serif; line-height: 1.8; color: #222; max-width: 680px; margin: 0 auto;">']
+    html_parts = ['<div style="font-family: Arial, sans-serif; line-height: 1.8; color: #222; background:#fff; padding:20px; border-radius:8px; max-width: 680px; margin: 0 auto;">']
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("### "):
@@ -1092,10 +1251,10 @@ def build_report_html(news_items: list, template: dict, attention_text: str = "�
         elif stripped.startswith("## "):
             html_parts.append(f'<h2 style="margin: 24px 0 12px; font-size: 20px; color: #0d3b66;">{stripped[3:]}</h2>')
         elif stripped and stripped[0].isdigit() and ". " in stripped[:4]:
-            html_parts.append(f'<p style="margin: 6px 0;">{stripped}</p>')
+            html_parts.append(f'<p style="margin: 6px 0; color:#222;">{stripped}</p>')
         elif stripped == "":
             html_parts.append('<br />')
         else:
-            html_parts.append(f'<p style="margin: 8px 0;">{stripped}</p>')
+            html_parts.append(f'<p style="margin: 8px 0; color:#222;">{stripped}</p>')
     html_parts.append('</div>')
     return "\n".join(html_parts)

@@ -5,6 +5,7 @@ async function loadConfig() {
     document.getElementById('channels').value = (result.data.channels || []).join('\n');
     document.getElementById('keywords').value = (result.data.keywords || []).join('\n');
     document.getElementById('categories').value = categoriesToText(result.data.categories || {});
+    document.getElementById('rssSources').value = (result.data.rss_sources || []).join('\n');
     return result.data;
   }
   return null;
@@ -15,6 +16,12 @@ function categoriesToText(categories) {
     .map(([name, keywords]) => `${name}: ${keywords.join(', ')}`)
     .join('\n');
 }
+
+/* ─── 分页状态 ─────────────────────────────────────────────── */
+const ITEMS_PER_PAGE = 10;
+let newsPage = 1;
+let newsSearchQuery = '';
+let crawlPage = 1;
 
 function escapeHtml(value) {
   return String(value || '')
@@ -57,6 +64,7 @@ async function saveConfig() {
   const channels = document.getElementById('channels').value.split('\n').map(x => x.trim()).filter(Boolean);
   const keywords = document.getElementById('keywords').value.split('\n').map(x => x.trim()).filter(Boolean);
   const categories = textToCategories(document.getElementById('categories').value);
+  const rssSources = document.getElementById('rssSources').value.split('\n').map(x => x.trim()).filter(Boolean);
   const closingStyle = document.getElementById('closingStyle').value;
   // 先读取当前完整配置以保留 template
   const curResp = await fetch('/api/config');
@@ -66,7 +74,7 @@ async function saveConfig() {
   const resp = await fetch('/api/config', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({channels, keywords, categories, template})
+    body: JSON.stringify({channels, keywords, categories, template, rss_sources: rssSources})
   });
   const result = await resp.json();
   alert(result.success ? '配置已保存' : '保存失败');
@@ -80,13 +88,41 @@ async function showNewsList() {
     container.innerHTML = '<p>读取资讯列表失败。</p>';
     return;
   }
-  const items = result.data;
-  window.currentNewsItems = items;
-  if (!items.length) {
+  const allItems = result.data;
+  window.currentNewsItems = allItems;
+
+  if (!allItems.length) {
     container.innerHTML = '<p>暂无资讯，请先抓取或手动录入。</p>';
+    document.getElementById('newsPagination').innerHTML = '';
     return;
   }
-  container.innerHTML = items.map(item => `
+
+  // 搜索过滤
+  const q = newsSearchQuery.trim().toLowerCase();
+  const filtered = q
+    ? allItems.filter(item =>
+        (item.title || '').toLowerCase().includes(q) ||
+        (item.source || '').toLowerCase().includes(q) ||
+        (item.content || '').toLowerCase().includes(q) ||
+        (item.category || '').toLowerCase().includes(q)
+      )
+    : allItems;
+
+  // 分页
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE));
+  if (newsPage > totalPages) newsPage = totalPages;
+  if (newsPage < 1) newsPage = 1;
+  const start = (newsPage - 1) * ITEMS_PER_PAGE;
+  const pageItems = filtered.slice(start, start + ITEMS_PER_PAGE);
+
+  if (!filtered.length) {
+    container.innerHTML = `<p style="color:var(--text-dim);">未找到匹配「${escapeHtml(q)}」的资讯。</p>`;
+    document.getElementById('newsPagination').innerHTML = '';
+    return;
+  }
+
+  // 渲染当前页
+  container.innerHTML = pageItems.map(item => `
     <div class="news-card" id="news-card-${item.id}">
       <div class="news-card-main">
         ${item.image_url ? `<img class="news-thumb" src="${escapeHtml(item.image_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}
@@ -122,6 +158,78 @@ async function showNewsList() {
       </div>
     </div>
   `).join('');
+
+  // 分页控件
+  const info = q
+    ? `找到 ${filtered.length} 条（共 ${allItems.length} 条）`
+    : `共 ${allItems.length} 条`;
+  let pagHtml = `<span class="page-info">${info}</span>`;
+  pagHtml += `<button class="page-btn" onclick="goNewsPage(${newsPage - 1})" ${newsPage <= 1 ? 'disabled' : ''}>‹ 上一页</button>`;
+  // 页码按钮（最多显示 7 个）
+  const maxPageBtns = 7;
+  let pageStart = Math.max(1, newsPage - Math.floor(maxPageBtns / 2));
+  let pageEnd = Math.min(totalPages, pageStart + maxPageBtns - 1);
+  if (pageEnd - pageStart + 1 < maxPageBtns) pageStart = Math.max(1, pageEnd - maxPageBtns + 1);
+  for (let p = pageStart; p <= pageEnd; p++) {
+    pagHtml += `<button class="page-btn ${p === newsPage ? 'active-page' : ''}" onclick="goNewsPage(${p})">${p}</button>`;
+  }
+  pagHtml += `<button class="page-btn" onclick="goNewsPage(${newsPage + 1})" ${newsPage >= totalPages ? 'disabled' : ''}>下一页 ›</button>`;
+  pagHtml += `<span class="page-info">第 ${newsPage}/${totalPages} 页</span>`;
+  document.getElementById('newsPagination').innerHTML = pagHtml;
+}
+
+
+
+
+function renderCrawlPage() {
+  const container = document.getElementById('crawlResult');
+  const items = window.currentCrawlItems || [];
+  if (!items.length) return;
+
+  const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
+  if (crawlPage > totalPages) crawlPage = totalPages;
+  if (crawlPage < 1) crawlPage = 1;
+  const from = (crawlPage - 1) * ITEMS_PER_PAGE;
+  const pageItems = items.slice(from, from + ITEMS_PER_PAGE);
+
+  var cards = pageItems.map(function(item) {
+    var badge = item._from_rss
+      ? '<span style="display:inline-block;background:#ffedd5;color:#c2410c;font-size:11px;padding:1px 6px;border-radius:4px;margin-left:6px;">RSS</span>'
+      : '';
+    var text = escapeHtml(item.content).replace(/\n/g, '<br/>');
+    return '<div class="crawl-card">'
+      + '<div><strong>' + escapeHtml(item.title) + '</strong>' + badge + '</div>'
+      + '<div>' + escapeHtml(item.source) + ' | \u5206\u7c7b\uff1a' + escapeHtml(item.category) + ' | \u5339\u914d\u5ea6\uff1a' + item.keyword_match + '%</div>'
+      + '<div>' + text + '</div>'
+      + '<div><a href="' + escapeHtml(item.url) + '" target="_blank" rel="noreferrer">\u539f\u6587\u94fe\u63a5</a></div>'
+      + '</div>';
+  }).join('');
+
+    var bar = '<div class="pagination-bar" style="margin-top:12px;">';
+  bar += '<button class="page-btn" onclick="goCrawlPage(' + (crawlPage - 1) + ')" ' + (crawlPage <= 1 ? 'disabled' : '') + '>\u2039 \u4e0a\u4e00\u9875</button>';
+  var maxBtns = 7;
+  var pStart = Math.max(1, crawlPage - Math.floor(maxBtns / 2));
+  var pEnd = Math.min(totalPages, pStart + maxBtns - 1);
+  if (pEnd - pStart + 1 < maxBtns) pStart = Math.max(1, pEnd - maxBtns + 1);
+  for (var p = pStart; p <= pEnd; p++) {
+    bar += '<button class="page-btn ' + (p === crawlPage ? 'active-page' : '') + '" onclick="goCrawlPage(' + p + ')">' + p + '</button>';
+  }
+  bar += '<button class="page-btn" onclick="goCrawlPage(' + (crawlPage + 1) + ')" ' + (crawlPage >= totalPages ? 'disabled' : '') + '>\u4e0b\u4e00\u9875 \u203a</button>';
+  bar += '<span class="page-info">\u5171 ' + items.length + ' \u6761</span></div>';
+
+  container.innerHTML = (window.currentCrawlSummary || '') + cards + bar;
+}
+function goCrawlPage(page) { crawlPage = page; renderCrawlPage(); }
+
+function goNewsPage(page) {
+  newsPage = page;
+  showNewsList();
+}
+
+function onNewsSearch(e) {
+  newsSearchQuery = e.target.value;
+  newsPage = 1;
+  showNewsList();
 }
 
 function toggleEditForm(id) {
@@ -172,7 +280,9 @@ async function clearNews() {
   const result = await resp.json();
   if (result.success) {
     document.getElementById('newsList').innerHTML = '<p>资讯列表已清空。</p>';
+    document.getElementById('newsPagination').innerHTML = '';
     document.getElementById('crawlResult').innerHTML = '';
+    newsPage = 1;
     alert('已清空');
   } else {
     alert('清空失败');
@@ -187,16 +297,17 @@ async function crawlNews() {
   btn.classList.add('is-loading');
 
   const container = document.getElementById('crawlResult');
-  container.innerHTML = '<p style="color:#888;">⏳ 正在抓取各渠道资讯，请稍候...</p>';
+  container.innerHTML = '<p style="color:#888;">⏳ 正在抓取各渠道及 RSS 资讯，请稍候...</p>';
 
   try {
     const channels = document.getElementById('channels').value.split('\n').map(x => x.trim()).filter(Boolean);
+    const rssUrls = document.getElementById('rssSources').value.split('\n').map(x => x.trim()).filter(Boolean);
     const keywords = document.getElementById('keywords').value.split('\n').map(x => x.trim()).filter(Boolean);
     const categories = textToCategories(document.getElementById('categories').value);
     const resp = await fetch('/api/news/crawl', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({channel_urls: channels, keywords, category_keywords: categories})
+      body: JSON.stringify({channel_urls: channels, rss_urls: rssUrls, keywords, category_keywords: categories})
     });
     const result = await resp.json();
     if (!result.success) {
@@ -209,16 +320,19 @@ async function crawlNews() {
       container.innerHTML = '<p>未获取到符合关键词的资讯。</p>';
       return;
     }
-    const summary = `<div style="margin-bottom:12px;color:#333;">✅ 抓取到 ${items.length} 条资讯，来源 ${crawlInfo.total || 0} 个渠道，其中 ${crawlInfo.succeeded || 0} 个渠道返回结果。已保存 ${result.added_count || 0} 条新资讯。</div>`;
-    const listHtml = items.map(item => `
-      <div class="crawl-card">
-        <div><strong>${escapeHtml(item.title)}</strong></div>
-        <div>${escapeHtml(item.source)} | 分类：${escapeHtml(item.category)} | 匹配度：${item.keyword_match}%</div>
-        <div>${escapeHtml(item.content).replace(/\n/g, '<br/>')}</div>
-        <div><a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">原文链接</a></div>
-      </div>
-    `).join('');
-    container.innerHTML = summary + listHtml;
+    const rssInfo = crawlInfo.rss_total > 0
+      ? `，RSS 订阅 ${crawlInfo.rss_total} 个源`
+      : '';
+    const summary = `<div style="margin-bottom:12px;color:#333;">✅ 抓取到 ${items.length} 条资讯，来源 ${crawlInfo.total || 0} 个网页渠道${rssInfo}。已保存 ${result.added_count || 0} 条新资讯。</div>`;
+        window.currentCrawlItems = items;
+    window.currentCrawlSummary = summary;
+    crawlPage = 1;
+    renderCrawlPage();
+    // 抓取后重置搜索和分页
+    newsSearchQuery = '';
+    const searchInput = document.getElementById('newsSearch');
+    if (searchInput) searchInput.value = '';
+    newsPage = 1;
     await showNewsList();
   } catch (err) {
     container.innerHTML = `<p>抓取异常：${err.message}</p>`;
@@ -525,16 +639,28 @@ async function resetDefaultConfig() {
       '无人环卫车', '低速无人车', '自动驾驶 园区', '无人配送车','无人出租车',
     ],
     categories: {
-      '政策动态': ['政策', '新规', '补贴', '路测', '试点', '规范', '公告', '安全运营'],
-      '企业落地': ['园区', '上线', '合作', '签约', '落地', '投放', '运营', '项目'],
-      '技术动态': ['传感器', '调度', '算法', '平台', '车路协同', '续航', '避障', 'AI'],
-      '招标采购': ['招标', '中标', '预算', '采购', '公告', '服务需求'],
-      '行业观点/海外资讯': ['专家', '趋势', '海外', '解读', '观点', '案例', '行业观察']
-    }
+      '政策动态': ['政策', '新规', '补贴', '路测', '试点', '规范', '公告', '安全运营',
+                  'regulation', 'policy', 'legislation', 'regulatory', 'permit', 'approval',
+                  'certification', 'NHTSA', 'safety standard', 'government', 'legal', 'law'],
+      '企业落地': ['园区', '上线', '合作', '签约', '落地', '投放', '运营', '项目',
+                  'launch', 'deploy', 'partnership', 'rollout', 'commercial', 'pilot',
+                  'investment', 'funding', 'service', 'delivery', 'operation'],
+      '技术动态': ['传感器', '调度', '算法', '平台', '车路协同', '续航', '避障', 'AI',
+                  'LiDAR', 'radar', 'computer vision', 'deep learning', 'perception',
+                  'HD map', 'V2X', 'connectivity', 'chip', 'SoC', 'software', 'simulation',
+                  'neural network', 'sensor', 'algorithm', 'transformer', 'OTA'],
+      '招标采购': ['招标', '中标', '预算', '采购', '公告', '服务需求',
+                  'tender', 'bid', 'procurement', 'contract', 'RFP', 'vendor', 'supplier'],
+      '行业观点/海外资讯': ['专家', '趋势', '海外', '解读', '观点', '案例', '行业观察',
+                      'analysis', 'opinion', 'report', 'forecast', 'market', 'research',
+                      'insight', 'survey', 'outlook', 'trend']
+    },
+    rss_sources: ['https://www.autonews.com/arc/outboundfeeds/rss/']
   };
   document.getElementById('channels').value = defaults.channels.join('\n');
   document.getElementById('keywords').value = defaults.keywords.join('\n');
   document.getElementById('categories').value = categoriesToText(defaults.categories);
+  document.getElementById('rssSources').value = defaults.rss_sources.join('\n');
   const saveResp = await fetch('/api/config', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -544,9 +670,87 @@ async function resetDefaultConfig() {
   alert(saveResult.success ? '已恢复默认配置并保存' : '保存失败');
 }
 
+
+
+async function verifyRssFeeds() {
+  const btn = document.getElementById('verifyRssBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '\u23f3 \u9a8c\u8bc1\u4e2d...';
+  const container = document.getElementById('rssVerifyResult');
+  container.innerHTML = '<p style="color:var(--text-dim);">\u6b63\u5728\u9a8c\u8bc1RSS\u6e90\u8fde\u901a\u6027...</p>';
+  try {
+    const urls = document.getElementById('rssSources').value.split('\n').filter(Boolean);
+    if (!urls.length) { container.innerHTML = '<p>\u8bf7\u5148\u6dfb\u52a0RSS\u8ba2\u9605\u6e90URL\u3002</p>'; return; }
+    const resp = await fetch('/api/rss/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({urls})});
+    const result = await resp.json();
+    if (!result.success) { container.innerHTML = '<p>\u9a8c\u8bc1\u5931\u8d25\u3002</p>'; return; }
+    var html = '<div style="margin-bottom:8px;"><span class="badge badge-pass">\u901a\u8fc7 ' + result.summary.ok + '</span> <span class="badge badge-fail">\u5931\u8d25 ' + result.summary.fail + '</span> <span style="color:var(--text-dim);font-size:12px;">\u5171 ' + result.summary.total + ' \u4e2a\u6e90</span></div><ul style="list-style:none;padding:0;font-size:13px;">';
+    for (var i = 0; i < result.data.length; i++) {
+      var feed = result.data[i];
+      if (feed.status === 'ok') {
+        html += '<li style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);"><span class="badge badge-pass" style="margin-right:8px;">PASS</span><strong>' + escapeHtml(feed.feed_title) + '</strong><span style="color:var(--text-dim);margin-left:6px;">' + feed.entry_count + ' \u6761</span><br/><code style="font-size:11px;color:var(--text-dim);word-break:break-all;">' + escapeHtml(feed.url) + '</code></li>';
+      } else {
+        html += '<li style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);"><span class="badge badge-fail" style="margin-right:8px;">FAIL</span><code style="font-size:12px;word-break:break-all;color:var(--text-muted);">' + escapeHtml(feed.url) + '</code><span style="color:#ff6b6b;margin-left:8px;font-size:12px;">' + escapeHtml(feed.error) + '</span></li>';
+      }
+    }
+    html += '</ul>';
+    container.innerHTML = html;
+  } catch (err) { container.innerHTML = '<p>\u9a8c\u8bc1\u5f02\u5e38\uff1a' + err.message + '</p>';
+  } finally { btn.disabled = false; btn.textContent = orig; }
+}
+async function deleteRssSource(url) {
+  if (!confirm('确认删除此 RSS 源？\n' + url)) return;
+  try {
+    const resp = await fetch('/api/rss/remove', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url})});
+    const result = await resp.json();
+    if (!result.success) { alert(result.message || '删除失败'); return; }
+    document.getElementById('rssSources').value = result.data.rss_sources.join('\n');
+    document.getElementById('rssVerifyResult').innerHTML = '<p style="color:var(--text-dim);">已删除，可重新验证查看结果。</p>';
+    alert('已删除');
+  } catch (err) { alert('删除异常: ' + err.message); }
+}
+
 window.addEventListener('DOMContentLoaded', async () => {
   const config = await loadConfig();
   await showNewsList();
+
+  // ── 通用 Sheet 切换 ──
+  function switchSheetInWrapper(barId, sheetName) {
+    const bar = document.getElementById(barId);
+    bar.querySelectorAll('.sheet-btn').forEach(b => b.classList.remove('active'));
+    const activeBtn = bar.querySelector(`.sheet-btn[data-sheet="${sheetName}"]`);
+    if (activeBtn) activeBtn.classList.add('active');
+    const wrapper = bar.closest('.sheet-wrapper');
+    wrapper.querySelectorAll('.sheet-panel').forEach(p => p.classList.add('hidden'));
+    const panel = wrapper.querySelector(`.sheet-panel[data-sheet="${sheetName}"]`);
+    if (panel) panel.classList.remove('hidden');
+  }
+
+  function bindSheetBar(barId) {
+    const bar = document.getElementById(barId);
+    if (!bar) return;
+    bar.addEventListener('click', e => {
+      const btn = e.target.closest('.sheet-btn');
+      if (btn) {
+        e.preventDefault();
+        switchSheetInWrapper(barId, btn.dataset.sheet);
+      }
+    });
+  }
+
+  bindSheetBar('sourceSheetBar');
+  bindSheetBar('sheetBar');
+
+  // ── 搜索（带防抖） ──
+  const searchInput = document.getElementById('newsSearch');
+  if (searchInput) {
+    let debounceTimer;
+    searchInput.addEventListener('input', e => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => onNewsSearch(e), 250);
+    });
+  }
   // 同步保存的结尾话术
   if (config && config.template) {
     const cs = config.template.closing_selected;
@@ -559,6 +763,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (config.wechat.name) document.getElementById('wechatName').value = config.wechat.name;
   }
   document.getElementById('saveConfig').addEventListener('click', saveConfig);
+  document.getElementById('verifyRssBtn').addEventListener('click', verifyRssFeeds);
   document.getElementById('crawlBtn').addEventListener('click', crawlNews);
   document.getElementById('refreshNewsBtn').addEventListener('click', showNewsList);
   document.getElementById('clearNewsBtn').addEventListener('click', clearNews);

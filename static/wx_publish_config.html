@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>微信公众号一键发布配置参数获取手册</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;font-family:"Microsoft Yahei",sans-serif;}
+        body{padding:30px;background:#f5f7fa;color:#333;line-height:1.7;}
+        .container{max-width:1200px;margin:0 auto;background:#fff;padding:35px;border-radius:8px;box-shadow:0 1px 12px #e2e6ec;}
+        h1{text-align:center;color:#07C160;border-bottom:3px solid #07C160;padding-bottom:15px;margin-bottom:30px;}
+        h2{margin:25px 0 12px;color:#222;background:#f0fbf4;padding:8px 12px;border-left:4px solid #07C160;}
+        h3{margin:18px 0 8px;color:#333;}
+        table{width:100%;border-collapse:collapse;margin:15px 0 25px;}
+        th,td{border:1px solid #dde2e9;padding:10px 12px;text-align:left;}
+        th{background:#f2f9f5;color:#078848;}
+        .code{background:#2d2d2d;color:#4cd964;padding:12px 15px;border-radius:5px;overflow-x:auto;margin:10px 0;font-family:Consolas;}
+        .tip{background:#fff8e6;border:1px solid #ffd270;padding:12px 15px;border-radius:5px;margin:12px 0;color:#905900;}
+        .warn{background:#ffeaea;border:1px solid #ff9c9c;padding:12px 15px;border-radius:5px;margin:12px 0;color:#c53030;}
+        .url-text{color:#0066cc;word-break:break-all;}
+        .step{margin-left:18px;list-style-type:decimal;}
+        .img-box{margin:10px 0;padding:10px;border:1px dashed #ccc;background:#fafafa;}
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>微信公众号程序一键发布配置项全指引（参数+获取地址+配置步骤）</h1>
+
+    <h2>一、核心配置清单总览（程序配置必填字段）</h2>
+    <table>
+        <tr>
+            <th>配置参数名</th>
+            <th>用途说明</th>
+            <th>是否必填</th>
+        </tr>
+        <tr>
+            <td>AppID</td>
+            <td>公众号唯一身份ID，接口鉴权基础参数</td>
+            <td>必填</td>
+        </tr>
+        <tr>
+            <td>AppSecret</td>
+            <td>开发者密钥，用于换取Access_token凭证</td>
+            <td>必填</td>
+        </tr>
+        <tr>
+            <td>IP白名单</td>
+            <td>程序部署服务器公网IP，微信接口访问白名单校验</td>
+            <td>必填</td>
+        </tr>
+        <tr>
+            <td>AccessToken(动态)</td>
+            <td>调用所有发布接口临时凭证，2小时有效期，程序自动刷新</td>
+            <td>接口调用必填</td>
+        </tr>
+        <tr>
+            <td>media_id</td>
+            <td>草稿图文素材ID，一键发布入参</td>
+            <td>发布必填</td>
+        </tr>
+    </table>
+
+    <h2>二、逐项参数获取路径、官方地址、截图指引</h2>
+    <h3>1. AppID & AppSecret 获取（最关键配置）</h3>
+    <p>官方后台入口：<span class="url-text">https://mp.weixin.qq.com/</span>（公众号管理后台）</p>
+    <ol class="step">
+        <li>微信扫码登录公众号后台 → 左侧菜单栏【设置与开发】→【基本配置】</li>
+        <li>页面上方直接展示 <strong>开发者ID(AppID)</strong>；<strong>开发者密码(AppSecret)</strong>点击「重置」生成（仅首次展示明文，妥善保存）</li>
+    </ol>
+    <div class="img-box">
+        <p>截图说明：基本配置页面AppID/AppSecret位置（红框标注）</p>
+        <p>页面参考位置：公众号后台-设置与开发-基本配置区域</p>
+    </div>
+    <div class="tip">提示：AppSecret泄露可随时在该页面重置，重置后旧密钥立即失效，程序需要同步更新密钥配置{insert\_element\_0\_}</div>
+
+    <h3>2. API接口IP白名单配置</h3>
+    <p>配置位置：公众号后台 → 设置与开发 → 基本配置 → IP白名单模块</p>
+    <ol class="step">
+        <li>查询程序部署服务器公网IP：<span class="url-text">https://www.ip.sb/</span> 打开直接查看本机公网IP</li>
+        <li>将公网IP填入白名单输入框，多个IP换行分隔，保存生效（生效约1~3分钟）</li>
+    </ol>
+    <div class="warn">报错【api unauthorized】绝大多数原因：未添加服务器IP到白名单</div>
+
+    <h3>3. Access_token（动态凭证，程序自动获取无需手动填写）</h3>
+    <p>官方获取接口URL：</p>
+    <div class="code">GET https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=【填入AppID】&secret=【填入AppSecret】</div>
+    <ul>
+        <li>grant_type固定值：client_credential，不可修改</li>
+        <li>有效期：7200秒（2小时），程序建议缓存（Redis/内存），到期前自动重新拉取</li>
+        <li>官方文档：<span class="url-text">https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Get_access_token.html</span></li>
+    </ul>
+
+    <h2>三、一键发布全链路接口地址（程序对接必填API）</h2>
+    <h3>步骤1：上传正文图片（正文图片必须走此接口，外部图片链接不生效）</h3>
+    <div class="code">POST https://api.weixin.qq.com/cgi-bin/media/uploadimg?access_token=ACCESS_TOKEN</div>
+    <p>作用：上传图片返回微信内部URL，用于文章正文插入图片，不占用素材库数量</p>
+    <p>官方文档：<span class="url-text">https://developers.weixin.qq.com/doc/offiaccount/Asset_Management/Upload_image_in_article.html</span></p>
+
+    <h3>步骤2：新建图文草稿（生成media_id，发布前置）</h3>
+    <div class="code">POST https://api.weixin.qq.com/cgi-bin/draft/add?access_token=ACCESS_TOKEN</div>
+    <p>入参：图文标题、封面图片media、正文内容、作者等；调用成功返回草稿唯一media_id</p>
+    <p>官方文档：<span class="url-text">https://developers.weixin.qq.com/doc/offiaccount/Draft_Box/Add_draft.html</span></p>
+
+    <h3>步骤3：一键正式发布接口（最终发布调用）</h3>
+    <div class="code">POST https://api.weixin.qq.com/cgi-bin/freepublish/submit?access_token=ACCESS_TOKEN</div>
+    <p>请求JSON示例：</p>
+    <div class="code">{"media_id":"草稿返回的media_id"}</div>
+    <p>返回publish_id，用于轮询发布审核状态；官方文档：<span class="url-text">https://developers.weixin.qq.com/doc/offiaccount/Publish/Publish.html</span></p>
+
+    <h2>四、订阅号/服务号权限说明</h2>
+    <table>
+        <tr>
+            <th>账号类型</th>
+            <th>自动发布权限</th>
+            <th>群发次数限制</th>
+        </tr>
+        <tr>
+            <td>未认证个人订阅号</td>
+            <td>无群发API权限，仅可操作草稿，无法自动发布群发</td>
+            <td>后台手动1次/天</td>
+        </tr>
+        <tr>
+            <td>已认证订阅号</td>
+            <td>开放freepublish草稿发布API（每日1次群发）</td>
+            <td>1次/自然日</td>
+        </tr>
+        <tr>
+            <td>认证服务号</td>
+            <td>全量群发API、定时发布接口可用</td>
+            <td>4次/自然月</td>
+        </tr>
+    </table>
+
+    <h2>五、测试号调试（无公众号可用测试）</h2>
+    <p>微信测试号（免认证、免费调试发布接口）：<span class="url-text">https://mp.weixin.qq.com/debug/cgi-bin/sandboxinfo</span></p>
+    <p>打开页面自动生成测试AppID/AppSecret，自动放行IP白名单，适合本地开发调试程序发布功能。</p>
+
+    <h2>六、常见配置报错排查</h2>
+    <ul>
+        <li>40001：AppID/AppSecret填写错误、密钥被重置 → 重新在后台复制密钥配置</li>
+        <li>40164：服务器IP未添加白名单 → 补充公网IP至公众号白名单</li>
+        <li>45028：素材media_id无效 → 重新调用草稿新增接口获取最新media_id</li>
+    </ul>
+</div>
+</body>
+</html>
