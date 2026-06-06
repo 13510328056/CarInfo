@@ -655,7 +655,7 @@ async function resetDefaultConfig() {
                       'analysis', 'opinion', 'report', 'forecast', 'market', 'research',
                       'insight', 'survey', 'outlook', 'trend']
     },
-    rss_sources: ['https://www.autonews.com/arc/outboundfeeds/rss/']
+    rss_sources: []
   };
   document.getElementById('channels').value = defaults.channels.join('\n');
   document.getElementById('keywords').value = defaults.keywords.join('\n');

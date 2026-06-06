@@ -73,7 +73,6 @@ DEFAULT_CONFIG = {
         "closing_selected": 0
     },
     "rss_sources": [
-        "https://www.autonews.com/arc/outboundfeeds/rss/"
     ]
 }
 
