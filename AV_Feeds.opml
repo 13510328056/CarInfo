@@ -4,34 +4,51 @@
     <title>Autonomous Vehicles RSS Feed List</title>
   </head>
   <body>
-    <!-- TechCrunch 原订阅 -->
+    <!-- ================================================================ -->
+    <!-- 欧美一线科技媒体                                                  -->
+    <!-- ================================================================ -->
     <outline text="TechCrunch-Autonomous Vehicles" title="TechCrunch-Autonomous Vehicles" xmlUrl="https://techcrunch.com/tag/autonomous-vehicles/feed/"/>
-
-    <!-- 欧美一线科技媒体 -->
     <outline text="The Verge-Autonomous Cars" title="The Verge-Autonomous Cars" xmlUrl="https://www.theverge.com/autonomous-cars/rss.xml"/>
     <outline text="WIRED-Autonomous Vehicles" title="WIRED-Autonomous Vehicles" xmlUrl="https://www.wired.com/feed/tag/autonomous-vehicles/rss"/>
     <outline text="VentureBeat-Autonomous Vehicles" title="VentureBeat-Autonomous Vehicles" xmlUrl="https://venturebeat.com/category/autonomous-vehicles/feed/"/>
     <outline text="Engadget-Autonomous Driving" title="Engadget-Autonomous Driving" xmlUrl="https://www.engadget.com/tag/autonomous-driving/rss.xml"/>
     <outline text="CNET-Autonomous Cars" title="CNET-Autonomous Cars" xmlUrl="https://www.cnet.com/rss/autonomous-cars/"/>
     <outline text="Techmeme-Auto News" title="Techmeme-Auto News" xmlUrl="https://techmeme.com/auto/rss"/>
+    <outline text="Ars Technica-Car Tech" title="Ars Technica-Car Tech" xmlUrl="https://feeds.arstechnica.com/arstechnica/car"/>
 
-    <!-- 国际汽车产业&财经媒体 -->
+    <!-- ================================================================ -->
+    <!-- 国际汽车产业 & 财经媒体                                            -->
+    <!-- ================================================================ -->
     <outline text="Automotive News-Autonomous" title="Automotive News-Autonomous" xmlUrl="https://www.autonews.com/rss/autonomous"/>
-    <outline text="Reuters-Autonomous Vehicles News" title="Reuters-Autonomous Vehicles News" xmlUrl="https://feeds.reuters.com/reuters/AutonomousVehiclesNews"/>
-    <outline text="The Guardian-Self-driving Cars" title="The Guardian-Self-driving Cars" xmlUrl="https://www.theguardian.com/technology/series/self-driving-cars/rss"/>
     <outline text="Bloomberg-Autonomous Automotive" title="Bloomberg-Autonomous Automotive" xmlUrl="https://www.bloomberg.com/feed/automotive/autonomous"/>
+    <outline text="The Guardian-Self-driving Cars" title="The Guardian-Self-driving Cars" xmlUrl="https://www.theguardian.com/technology/series/self-driving-cars/rss"/>
 
-    <!-- 硬核技术&厂商博客 -->
-    <outline text="IEEE Spectrum-Autonomous Vehicles" title="IEEE Spectrum-Autonomous Vehicles" xmlUrl="https://spectrum.ieee.org/rss/blog/autonomous-vehicles"/>
+    <!-- ================================================================ -->
+    <!-- 新能源汽车/自动驾驶垂类媒体                                         -->
+    <!-- ================================================================ -->
+    <outline text="Electrek" title="Electrek" xmlUrl="https://electrek.co/feed/"/>
+    <outline text="MIT Tech Review-Transportation" title="MIT Tech Review-Transportation" xmlUrl="https://www.technologyreview.com/topic/transportation/feed/"/>
+
+    <!-- ================================================================ -->
+    <!-- 硬核技术 & 厂商博客                                                -->
+    <!-- ================================================================ -->
+    <outline text="IEEE Spectrum-Autonomous Vehicles" title="IEEE Spectrum-Autonomous Vehicles" xmlUrl="https://spectrum.ieee.org/feeds/autonomous-vehicles.rss"/>
     <outline text="NVIDIA Global-Automotive Blog" title="NVIDIA Global-Automotive Blog" xmlUrl="https://blogs.nvidia.com/blog/category/automotive/feed/"/>
     <outline text="ThinkAutonomous Blog" title="ThinkAutonomous Blog" xmlUrl="https://thinkautonomous.ai/blog/rss"/>
     <outline text="Waymo Official Blog" title="Waymo Official Blog" xmlUrl="https://waymo.com/blog/feed/"/>
     <outline text="Mobileye Official Blog" title="Mobileye Official Blog" xmlUrl="https://www.mobileye.com/blog/feed/"/>
-    <outline text="Teslarati-FSD" title="Teslarati-FSD" xmlUrl="https://rsshub.app/teslarati/category/fsd"/>
+    <outline text="Cruise Official Blog" title="Cruise Official Blog" xmlUrl="https://www.cruise.com/blog/rss"/>
 
-    <!-- 国内中文自动驾驶资讯 -->
-    <outline text="InfoQ-自动驾驶专题" title="InfoQ-自动驾驶专题" xmlUrl="https://rsshub.app/infoq/topic/125"/>
-    <outline text="盖世汽车-自动驾驶" title="盖世汽车-自动驾驶" xmlUrl="https://rsshub.app/gasgoo/news/autodrive"/>
-    <outline text="36氪-智能汽车专栏" title="36氪-智能汽车专栏" xmlUrl="https://rsshub.app/36kr/column/selfdriving"/>
+    <!-- ================================================================ -->
+    <!-- 国内中文自动驾驶资讯                                              -->
+    <!-- ================================================================ -->
+    <!--
+      注：以下国内源使用 https://rsshub.app 公共实例，可能被防火墙封锁。
+      如需稳定访问，建议自建 RSSHub（Docker: docker pull diygod/rsshub）。
+      例：https://rsshub.app/infoq/topic/125 → http://你的实例/infoq/topic/125
+    -->
+    <outline text="InfoQ-自动驾驶专题（需自建 RSSHub）" title="InfoQ-自动驾驶专题（需自建 RSSHub）" xmlUrl="https://rsshub.app/infoq/topic/125"/>
+    <outline text="盖世汽车-自动驾驶（需自建 RSSHub）" title="盖世汽车-自动驾驶（需自建 RSSHub）" xmlUrl="https://rsshub.app/gasgoo/news/autodrive"/>
+    <outline text="36氪-智能汽车（需自建 RSSHub）" title="36氪-智能汽车（需自建 RSSHub）" xmlUrl="https://rsshub.app/36kr/motif/auto"/>
   </body>
 </opml>

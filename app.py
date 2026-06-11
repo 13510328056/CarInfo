@@ -3,7 +3,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-from services import build_report_html, build_report_mp, build_report_mp_html, build_report_text, classify_news, crawl_channels, crawl_rss_feeds, parse_opml, verify_channel, verify_rss_feed
+from services import build_report_mp, build_report_mp_html, classify_news, crawl_channels, crawl_rss_feeds, parse_opml, train_news_classifier, verify_channel, verify_rss_feed
 from storage import (
     add_news_item,
     archive_report,
@@ -16,7 +16,7 @@ from storage import (
     save_news_list,
     update_news_item,
 )
-from wechat import create_draft
+from wechat import create_draft, replace_images_in_html
 
 app = Flask(__name__, static_folder="static", static_url_path="", template_folder="templates")
 
@@ -139,6 +139,10 @@ def api_crawl():
             add_news_item(item_data)
             added_items.append(item_data)
             existing_urls.add(item["url"])
+    # 训练 ML 分类器（如果有新增数据）
+    if added_items:
+        from services import train_news_classifier
+        train_news_classifier(get_news_list())
     return jsonify({"success": True, "data": all_results, "added_count": len(added_items), "crawl_info": {
         "total": result["total"],
         "succeeded": result["succeeded"],
@@ -254,7 +258,7 @@ def api_export():
     payload = request.get_json(force=True)
     if not payload:
         return jsonify({"success": False, "message": "缺少导出参数"}), 400
-    format_type = payload.get("format", "text")
+    format_type = "mp"  # 只保留公众号格式
     news_items = payload.get("news_items") or get_news_list()
     template = dict(payload.get("template") or get_config().get("template", {}))
     attention = payload.get("attention_text", "明日持续关注园区无人车招标及落地动态")
@@ -266,15 +270,8 @@ def api_export():
     if not news_items:
         return jsonify({"success": False, "message": "没有可导出的资讯"}), 400
     try:
-        if format_type == "html":
-            report = build_report_html(news_items, template, attention)
-            report_html = ""
-        elif format_type == "mp":
-            report = build_report_mp(news_items, template, attention)
-            report_html = build_report_mp_html(news_items, template, attention)
-        else:
-            report = build_report_text(news_items, template, attention)
-            report_html = ""
+        report = build_report_mp(news_items, template, attention)
+        report_html = build_report_mp_html(news_items, template, attention)
         archive_report(datetime.now().strftime("%Y-%m-%d"), {"format": format_type, "report": report})
     except Exception as e:
         return jsonify({"success": False, "message": f"导出失败: {str(e)}"}), 500
@@ -308,6 +305,12 @@ def api_wechat_publish():
     try:
         # 生成用于微信的 HTML
         html_report = build_report_mp_html(news_items, template, attention)
+
+        # 将正文中的外网图片上传到微信 CDN，防止外链被屏蔽
+        print(f"[wechat] 开始上传内容图片到微信 CDN ...")
+        html_report = replace_images_in_html(appid, appsecret, html_report)
+        print(f"[wechat] 内容图片处理完成")
+
         # 纯文本用于摘要
         text_report = build_report_mp(news_items, template, attention)
         # 截取前 60 字节作为摘要（微信限制），避免截断 UTF-8 多字节字符
@@ -377,4 +380,13 @@ def api_reset_template():
 
 
 if __name__ == "__main__":
+    # 启动时如果有历史数据，训练 ML 分类器
+    try:
+        from services import train_news_classifier
+        news_data = get_news_list()
+        if len(news_data) >= 15:
+            train_news_classifier(news_data)
+            print(f"[startup] ML 分类器已训练（{len(news_data)} 条样本）")
+    except Exception:
+        pass
     app.run(host="0.0.0.0", port=5000, debug=True)

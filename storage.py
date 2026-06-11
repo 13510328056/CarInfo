@@ -16,11 +16,13 @@ DEFAULT_CONFIG = {
         "https://www.sogou.com/sogou?query=园区无人车+自动驾驶&ie=utf8",
         "https://www.chinabidding.com.cn/search?keyword=无人车",
         "https://www.bidcenter.com.cn/Search/?keyword=无人车",
-        "https://auto.gasgoo.com/",
+        "https://auto.gasgoo.com/Hot/43/101",
         "https://www.autohome.com.cn/bestauto/",
         "https://www.d1ev.com/",
         "https://www.thepaper.cn/tag/47646",
-        "https://www.baidu.com/s?tn=news&rtt=1&bsst=1&wd=专业资讯+无人车&cl=2"
+        "https://www.baidu.com/s?tn=news&rtt=1&bsst=1&wd=专业资讯+无人车&cl=2",
+        "https://www.leiphone.com/tag/自动驾驶",
+        "https://www.leiphone.com/tag/无人车"
     ],
     "keywords": [
         "园区无人车",

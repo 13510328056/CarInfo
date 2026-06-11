@@ -406,7 +406,6 @@ async function addManualNews() {
 }
 
 async function exportReport() {
-  const format = document.getElementById('exportFormat').value;
   const closingStyle = document.getElementById('closingStyle').value;
   const attentionText = document.getElementById('attentionText').value.trim();
   const resp = await fetch('/api/news');
@@ -423,85 +422,28 @@ async function exportReport() {
   const exportResp = await fetch('/api/export', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({format, news_items, attention_text: attentionText, closing_style: closingStyle})
+    body: JSON.stringify({news_items, attention_text: attentionText, closing_style: closingStyle})
   });
   const exportResult = await exportResp.json();
   const container = document.getElementById('exportResult');
-  const copyBtn = document.getElementById('copyExportBtn');
   const publishBtn = document.getElementById('publishBtn');
   if (!exportResult.success) {
     container.innerHTML = '<p>导出失败。</p>';
-    copyBtn.style.display = 'none';
     publishBtn.style.display = 'none';
     return;
   }
-  if (format === 'mp') {
-    // 存储纯文本和 HTML 用于复制
-    const plainText = exportResult.data.report;
-    const htmlText = exportResult.data.report_html || plainText;
-    copyBtn.dataset.text = plainText;
-    copyBtn.dataset.html = htmlText;
-    copyBtn.style.display = 'inline-block';
 
-    container.innerHTML = `<div class="mp-preview">${htmlText}</div>`;
+  const htmlText = exportResult.data.report_html || exportResult.data.report;
+  container.innerHTML = `<div class="mp-preview">${htmlText}</div>`;
 
-    // 检查是否配置了微信发布
-    const appid = document.getElementById('wechatAppid').value.trim();
-    if (appid) {
-      publishBtn.style.display = 'inline-block';
-      publishBtn.dataset.attentionText = attentionText;
-      publishBtn.dataset.closingStyle = closingStyle;
-    } else {
-      publishBtn.style.display = 'none';
-    }
-  } else if (format === 'html') {
-    container.innerHTML = exportResult.data.report;
-    copyBtn.style.display = 'none';
-    publishBtn.style.display = 'none';
+  // 检查是否配置了微信发布
+  const appid = document.getElementById('wechatAppid').value.trim();
+  if (appid) {
+    publishBtn.style.display = 'inline-block';
+    publishBtn.dataset.attentionText = attentionText;
+    publishBtn.dataset.closingStyle = closingStyle;
   } else {
-    container.innerHTML = `<pre>${exportResult.data.report}</pre>`;
-    copyBtn.style.display = 'none';
     publishBtn.style.display = 'none';
-  }
-}
-
-function copyExport() {
-  const btn = document.getElementById('copyExportBtn');
-  const plainText = btn.dataset.text;
-  const htmlText = btn.dataset.html;
-  if (!plainText) return;
-
-  if (navigator.clipboard && navigator.clipboard.write) {
-    // 同时写入纯文本和 HTML，粘贴到微信编辑器时自动使用 HTML 格式
-    navigator.clipboard.write([
-      new ClipboardItem({
-        'text/plain': new Blob([plainText], {type: 'text/plain'}),
-        'text/html': new Blob([htmlText], {type: 'text/html'})
-      })
-    ]).then(() => {
-      const orig = btn.textContent;
-      btn.textContent = '✅ 已复制（含格式）';
-      setTimeout(() => { btn.textContent = orig; }, 2500);
-    }).catch(() => {
-      // Fallback to plain text only
-      navigator.clipboard.writeText(plainText).then(() => {
-        btn.textContent = '✅ 已复制（纯文本）';
-        setTimeout(() => { btn.textContent = '一键复制（含格式）'; }, 2000);
-      });
-    });
-  } else {
-    // Fallback: select from a temporary textarea
-    const ta = document.createElement('textarea');
-    ta.value = plainText;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    const orig = btn.textContent;
-    btn.textContent = '✅ 已复制';
-    setTimeout(() => { btn.textContent = orig; }, 2000);
   }
 }
 
@@ -771,7 +713,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('clearHistoryBtn').addEventListener('click', clearHistory);
   document.getElementById('addNewsBtn').addEventListener('click', addManualNews);
   document.getElementById('exportBtn').addEventListener('click', exportReport);
-  document.getElementById('copyExportBtn').addEventListener('click', copyExport);
   document.getElementById('publishBtn').addEventListener('click', publishToWeChat);
   document.getElementById('saveWechatConfig').addEventListener('click', saveWechatConfig);
   document.getElementById('verifyChannelsBtn').addEventListener('click', verifyChannels);

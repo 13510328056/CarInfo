@@ -8,9 +8,33 @@ from html import unescape
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+import difflib
+import os
+import pickle
+import warnings
+
 import feedparser
 import requests
 from bs4 import BeautifulSoup, FeatureNotFound
+
+# ─── ML 分类（可选） ────────────────────────────────────────────────────────
+_CLASSIFIER_CACHE = {"vectorizer": None, "clf": None, "trained": False}
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.naive_bayes import MultinomialNB
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    _SKLEARN_AVAILABLE = False
+
+# ─── Trafilatura 全文提取（可选） ──────────────────────────────────────────
+try:
+    import trafilatura
+    _TRAFILATURA_AVAILABLE = True
+except ImportError:
+    _TRAFILATURA_AVAILABLE = False
+
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
 CATEGORY_ORDER = [
     "政策动态",
@@ -237,6 +261,169 @@ def classify_news(title: str, content: str, category_keywords: dict):
     return best_category, min(100, best_score * 20)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 增强分类：TF-IDF + 朴素贝叶斯（在关键词规则之上提供 ML 层）
+# ═══════════════════════════════════════════════════════════════════════════
+
+def train_news_classifier(news_items: list) -> bool:
+    """
+    从已有历史资讯训练 TF-IDF + 朴素贝叶斯分类器。
+    要求每个分类至少 3 条样本，否则跳过训练。
+    训练好的模型缓存在模块全局变量 _CLASSIFIER_CACHE 中。
+    """
+    global _CLASSIFIER_CACHE
+    if not _SKLEARN_AVAILABLE:
+        return False
+
+    # 过滤有分类标记的样本
+    labeled = [
+        (f"{n.get('title','')} {n.get('content','')}", n.get("category", ""))
+        for n in news_items if n.get("category") and n.get("title")
+    ]
+    if len(labeled) < 15:
+        return False  # 样本太少，不训练
+
+    texts, labels = zip(*labeled)
+    # 检查每个分类的样本数
+    from collections import Counter
+    label_counts = Counter(labels)
+    min_samples = min(label_counts.values())
+    if min_samples < 3:
+        return False  # 某个分类样本太少，模型不可靠
+
+    try:
+        vectorizer = TfidfVectorizer(
+            ngram_range=(1, 2),
+            max_features=5000,
+            sublinear_tf=True,
+            stop_words="english",
+        )
+        X = vectorizer.fit_transform(texts)
+        clf = MultinomialNB(alpha=0.1)
+        clf.fit(X, labels)
+        _CLASSIFIER_CACHE["vectorizer"] = vectorizer
+        _CLASSIFIER_CACHE["clf"] = clf
+        _CLASSIFIER_CACHE["trained"] = True
+        return True
+    except Exception:
+        return False
+
+
+def classify_news_ml(title: str, content: str, category_keywords: dict) -> tuple:
+    """
+    ML + 关键词混合分类策略：
+    1. 如果 ML 模型已训练，先尝试 ML 预测
+    2. 如果 ML 预测置信度高（概率 >= 0.5），以 ML 结果为准
+    3. 否则退回到关键词匹配结果
+    """
+    text = f"{title}\n{content}"
+    ml_category = None
+    ml_score = 0
+
+    # 第一步：ML 预测
+    if _CLASSIFIER_CACHE["trained"] and text.strip():
+        try:
+            vec = _CLASSIFIER_CACHE["vectorizer"].transform([text])
+            probs = _CLASSIFIER_CACHE["clf"].predict_proba(vec)[0]
+            max_prob = max(probs)
+            if max_prob >= 0.5:  # 置信度阈值
+                idx = probs.argmax()
+                ml_category = _CLASSIFIER_CACHE["clf"].classes_[idx]
+                ml_score = int(max_prob * 100)
+        except Exception:
+            pass
+
+    # 第二步：关键词匹配（兜底）
+    kw_category = "行业观点/海外资讯"
+    kw_score = 0
+    for cat, keywords in category_keywords.items():
+        score = count_keywords(text, keywords)
+        if score > kw_score:
+            kw_score = score
+            kw_category = cat
+
+    # 第三步：决策融合
+    if ml_category and ml_score >= 60:
+        return ml_category, ml_score
+    if ml_category and ml_score >= kw_score * 20:
+        return ml_category, ml_score
+    return kw_category, min(100, kw_score * 20)
+
+
+# 替换原有 classify_news 引用——保持函数名一致
+def classify_news(title: str, content: str, category_keywords: dict):
+    """增强版分类：ML + 关键词混合（向后兼容）。"""
+    return classify_news_ml(title, content, category_keywords)
+
+
+def is_duplicate_by_title(new_title: str, existing_titles: list, threshold: float = 0.72) -> bool:
+    """
+    基于标题相似度的模糊去重。
+    将新标题与已有标题列表比对，超过 threshold 则视为重复。
+    """
+    if not new_title or not existing_titles:
+        return False
+    new_lower = new_title.lower().strip()
+    for old in existing_titles:
+        if not old:
+            continue
+        # 快速检查：一个包含另一个
+        old_lower = old.lower().strip()
+        if len(new_lower) >= 8 and (new_lower in old_lower or old_lower in new_lower):
+            return True
+        # 严格检查：编辑距离比
+        ratio = difflib.SequenceMatcher(None, new_lower, old_lower).ratio()
+        if ratio > threshold:
+            return True
+    return False
+
+
+def extract_with_trafilatura(html: str, url: str = "") -> dict:
+    """
+    使用 trafilatura 提取文章标题/正文/图片，比手动 BeautifulSoup 更健壮。
+    返回 dict 或 None（提取失败时）。
+    """
+    if not _TRAFILATURA_AVAILABLE:
+        return None
+
+    try:
+        result = trafilatura.extract(
+            html,
+            output_format="json",
+            include_comments=False,
+            include_tables=False,
+            include_links=True,
+            include_images=True,
+            favor_precision=True,
+            url=url,
+        )
+        if not result:
+            return None
+        data = json.loads(result)
+        text = data.get("text", "") or ""
+        title = data.get("title", "") or ""
+
+        # 提取图片
+        img_url = ""
+        raw_images = data.get("raw_text", "") or ""
+        if not img_url and "images" in data:
+            for img in data.get("images", []):
+                src = img.get("src", "") if isinstance(img, dict) else ""
+                if src and _is_content_image(src):
+                    img_url = src
+                    break
+
+        if not text and not title:
+            return None
+        return {
+            "title": title.strip(),
+            "content": text.strip()[:2000],
+            "image_url": img_url,
+        }
+    except Exception:
+        return None
+
+
 def extract_publish_time_from_soup(soup: BeautifulSoup) -> str:
     candidates = []
     for meta_name in ["publishdate", "pubdate", "article:published_time", "date", "Date"]:
@@ -255,12 +442,21 @@ def extract_publish_time_from_soup(soup: BeautifulSoup) -> str:
 
 
 def extract_news_from_html(url: str, html: str, keywords: list, category_keywords: dict = None):
-    soup = make_soup(html)
-    title = extract_title(soup, url)
+    # 优先用 trafilatura 提取（全文质量更高）
+    tf_result = extract_with_trafilatura(html, url)
+    if tf_result and tf_result.get("content") and len(tf_result["content"]) > 80:
+        title = tf_result["title"] or extract_title(make_soup(html), url)
+        content = tf_result["content"]
+        image_url = tf_result.get("image_url", "") or extract_og_image(make_soup(html), url)
+    else:
+        # 回退到原逻辑
+        soup = make_soup(html)
+        title = extract_title(soup, url)
+        content = extract_article_summary(soup)
+        image_url = extract_og_image(soup, url)
+
     source = extract_source(url)
-    publish_time = extract_publish_time_from_soup(soup)
-    content = extract_article_summary(soup)
-    image_url = extract_og_image(soup, url)
+    publish_time = extract_publish_time_from_soup(make_soup(html))
     keyword_count = count_keywords(f"{title}\n{content}", keywords)
     keyword_match = int(min(100, keyword_count / max(1, len(keywords)) * 100))
     category = None
@@ -507,10 +703,21 @@ def crawl_channels(channel_urls: list, keywords: list, category_keywords: dict =
         details.append(detail)
     unique_results = []
     seen_links = set()
+    seen_titles = []
     for item in results:
-        if item.get("url") and item["url"] not in seen_links:
-            unique_results.append(item)
-            seen_links.add(item["url"])
+        url = item.get("url")
+        # URL 去重
+        if url and url in seen_links:
+            continue
+        # 标题模糊去重
+        title = item.get("title", "")
+        if title and is_duplicate_by_title(title, seen_titles):
+            continue
+        if url:
+            seen_links.add(url)
+        if title:
+            seen_titles.append(title)
+        unique_results.append(item)
     return {
         "results": unique_results,
         "details": details,
@@ -907,7 +1114,7 @@ def build_report_mp(news_items: list, template: dict,
         lines.append(f"{idx}. **{item['title']}**")
     lines.append("")
 
-    # ----- 按分类分组 -----
+    # ----- 按分类分组（每类最多 4 条）-----
     grouped = {cat: [] for cat in CATEGORY_ORDER}
     for item in news_items:
         grouped.setdefault(item.get("category", CATEGORY_ORDER[-1]), []).append(item)
@@ -915,7 +1122,7 @@ def build_report_mp(news_items: list, template: dict,
     displayed = set()
 
     # ----- 📋 政策动态 -----
-    policy_items = grouped.get("政策动态", [])
+    policy_items = (grouped.get("政策动态", []) or [])[:4]
     if policy_items:
         displayed.add("政策动态")
         lines.append("\U0001f4cb 政策动态")
@@ -924,7 +1131,7 @@ def build_report_mp(news_items: list, template: dict,
             lines.extend(_render_policy_item(item, i))
 
     # ----- 🚗 企业&落地案例 -----
-    landing_items = grouped.get("企业落地", [])
+    landing_items = (grouped.get("企业落地", []) or [])[:4]
     if landing_items:
         displayed.add("企业落地")
         lines.append("\U0001f697 企业&落地案例")
@@ -933,7 +1140,7 @@ def build_report_mp(news_items: list, template: dict,
             lines.extend(_render_landing_item(item))
 
     # ----- 💡 招标&中标 -----
-    procurement_items = grouped.get("招标采购", [])
+    procurement_items = (grouped.get("招标采购", []) or [])[:4]
     if procurement_items:
         displayed.add("招标采购")
         lines.append("\U0001f4a1 招标&中标")
@@ -942,7 +1149,7 @@ def build_report_mp(news_items: list, template: dict,
             lines.extend(_render_procurement_item(item, i))
 
     # ----- 📈 技术&行业观察 -----
-    tech_items = grouped.get("技术动态", [])
+    tech_items = (grouped.get("技术动态", []) or [])[:4]
     if tech_items:
         displayed.add("技术动态")
         lines.append("\U0001f4c8 技术&行业观察")
@@ -950,11 +1157,11 @@ def build_report_mp(news_items: list, template: dict,
         for i, item in enumerate(tech_items, start=1):
             lines.extend(_render_tech_item(item, i, is_first=(i == 1)))
 
-    # ----- 🌐 剩余分类（行业观点/海外资讯等） -----
+    # ----- 🌐 剩余分类（行业观点/海外资讯等）-----
     for cat in CATEGORY_ORDER:
         if cat in displayed:
             continue
-        items = grouped.get(cat, [])
+        items = (grouped.get(cat, []) or [])[:4]
         if not items:
             continue
         emoji = CATEGORY_EMOJI.get(cat, "\U0001f4cb")
@@ -991,39 +1198,6 @@ def _html_escape(text: str) -> str:
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace('"', "&quot;"))
-
-
-def _render_html_section(title: str, content_lines: list) -> str:
-    """渲染一个板块的 HTML。"""
-    parts = [f'<p style="font-weight:bold;font-size:15px;margin:14px 0 6px;color:#0d3b66;">{_html_escape(title)}</p>']
-    for line in content_lines:
-        if not line:
-            parts.append('<p style="margin:2px 0;">&nbsp;</p>')
-        elif line.startswith("▫️"):
-            parts.append(f'<p style="margin:4px 0;padding-left:0;color:#333;font-size:14px;line-height:1.7;">{_html_escape(line)}</p>')
-        else:
-            parts.append(f'<p style="margin:4px 0;color:#333;font-size:14px;line-height:1.7;">{_html_escape(line)}</p>')
-    return "\n".join(parts)
-
-
-def _url_to_link(text: str) -> str:
-    """将文本中的"📎short_url"替换为蓝色可点击的"📎 short_url"。"""
-    return re.sub(
-        r'📎(https?://[^\s\'"<>，、）\)…]+)',
-        r'<a href="\1" target="_blank" rel="noreferrer" style="color:#1a6b9e;text-decoration:none;border-bottom:1px solid #c8daf0;">📎 \1</a>',
-        text
-    )
-
-
-def _html_img(img_url: str, alt: str = "") -> str:
-    """生成朋友圈/公众号风格的图片 HTML 块。"""
-    if not img_url:
-        return ""
-    return (f'<div style="margin:8px 0;border-radius:10px;overflow:hidden;'
-            f'background:#f5f7fa;text-align:center;">'
-            f'<img data-src="{_html_escape(img_url)}" alt="{_html_escape(alt)}" '
-            f'style="width:100%;max-width:100%;display:block;object-fit:cover;'
-            f'max-height:300px;" /></div>')
 
 
 def build_report_mp_html(news_items: list, template: dict,
@@ -1068,30 +1242,40 @@ def build_report_mp_html(news_items: list, template: dict,
 
     parts = [
         '<meta charset="utf-8">',
-        '<section style="padding:2px 12px 20px;font-size:15px;color:#222;line-height:1.8;max-width:620px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,Microsoft YaHei,PingFang SC,sans-serif;">',
-        # ---- 标题 ----
-        f'<p style="font-size:18px;font-weight:bold;text-align:center;color:#0d3b66;margin:16px 0 2px;letter-spacing:0.03em;">{_html_escape(title)}</p>',
-        # ---- 引导语 ----
-        '<p style="font-size:14px;text-align:center;color:#7a8ba8;margin:4px 0 20px;line-height:1.6;">聚焦园区无人车垂直领域 · 每日汇总政策、落地、招标、技术核心资讯</p>',
-        # ---- 分割线 ----
-        '<div style="height:1px;background:linear-gradient(90deg,transparent,#dce3f5,transparent);margin:0 0 20px;"></div>',
-    ]
+        '<section style="padding:2px 12px 24px;font-size:15px;color:#222;line-height:1.8;max-width:620px;margin:0 auto;font-family:-apple-system,BlinkMacSystemFont,Microsoft YaHei,PingFang SC,sans-serif;">',
 
-    # ===== 📢 今日速览 =====
+        # ===== 顶部横幅 =====
+        '<div style="background:linear-gradient(135deg,#0d3b66,#1a6b9e);border-radius:16px;padding:24px 20px 18px;margin:12px 0 20px;text-align:center;">'
+        f'<p style="margin:0;font-size:20px;font-weight:bold;color:#fff;letter-spacing:0.05em;">{_html_escape(title)}</p>'
+        f'<p style="margin:8px 0 0;font-size:13px;color:rgba(255,255,255,0.8);">📅 {month}月{day}日 · 共{len(news_items)}条资讯</p>'
+        '</div>',
+
+        # ===== 今日速览 =====
+        '<div style="background:#f0f6ff;border-radius:12px;padding:14px 18px;margin-bottom:20px;border-left:4px solid #1a6b9e;">'
+        '<p style="margin:0 0 8px;font-weight:bold;font-size:15px;color:#0d3b66;">📢 今日速览</p>',
+    ]
     if news_items:
-        parts.append('<p style="font-weight:bold;font-size:16px;margin:0 0 10px;color:#0d3b66;">📢 今日速览</p>')
         for idx, item in enumerate(news_items[:3], start=1):
             parts.append(
-                f'<p style="margin:4px 0 4px 18px;font-size:14px;line-height:1.7;">'
-                f'<span style="font-weight:bold;color:#1a6b9e;">{idx}.</span> '
+                f'<p style="margin:3px 0;font-size:14px;line-height:1.6;color:#333;">'
+                f'<span style="display:inline-block;width:18px;height:18px;background:#1a6b9e;color:#fff;'
+                f'border-radius:50%;text-align:center;font-size:11px;font-weight:bold;line-height:18px;margin-right:6px;">{idx}</span>'
                 f'<strong>{_html_escape(item["title"])}</strong></p>'
             )
-        parts.append('<div style="height:1px;background:linear-gradient(90deg,transparent,#eef3fa,transparent);margin:16px 0;"></div>')
+    parts.append('</div>')
 
     # ===== 各分类卡片 =====
     displayed = set()
 
-    # 分类标题定义（带 emoji）
+    # 分类配色
+    CAT_COLORS = {
+        "政策动态": {"bar": "#e74c3c", "bg": "#fef5f5"},
+        "企业落地": {"bar": "#2ecc71", "bg": "#f0faf4"},
+        "招标采购": {"bar": "#f39c12", "bg": "#fef9f0"},
+        "技术动态": {"bar": "#3498db", "bg": "#f0f7fe"},
+        "行业观点/海外资讯": {"bar": "#9b59b6", "bg": "#f5f0fa"},
+    }
+
     SECTION_META = [
         ("政策动态", "📋", "政策动态"),
         ("企业落地", "🚗", "企业&amp;落地案例"),
@@ -1101,14 +1285,17 @@ def build_report_mp_html(news_items: list, template: dict,
     ]
 
     for cat_key, emoji, section_title in SECTION_META:
-        items = grouped.get(cat_key, [])
+        items = (grouped.get(cat_key, []) or [])[:4]
         if not items:
             continue
         displayed.add(cat_key)
+        colors = CAT_COLORS.get(cat_key, {"bar": "#1a6b9e", "bg": "#f8faff"})
 
-        # 板块标题
+        # 板块标题（带色条）
         parts.append(
-            f'<p style="font-weight:bold;font-size:16px;margin:22px 0 12px;color:#0d3b66;">{emoji} {section_title}</p>'
+            f'<div style="border-left:4px solid {colors["bar"]};padding-left:12px;margin:24px 0 14px;">'
+            f'<p style="margin:0;font-weight:bold;font-size:17px;color:#0d3b66;">{emoji} {section_title}'
+            f' <span style="font-size:12px;color:#999;font-weight:400;">({len(items)}条)</span></p></div>'
         )
 
         for i, item in enumerate(items):
@@ -1119,142 +1306,97 @@ def build_report_mp_html(news_items: list, template: dict,
             item_url = item.get("url", "")
             short_link = shorten_url(item_url) if item_url else ""
 
-            # ---- 卡片开始 ----
-            parts.append(
-                '<div style="background:#f8faff;border-radius:12px;padding:14px 16px;'
-                'margin-bottom:12px;border:1px solid #eef2f8;">'
-            )
+            # ---- 图文卡片 ----
+            card_parts = [
+                f'<div style="background:{colors["bg"]};border-radius:14px;padding:16px;'
+                f'margin-bottom:12px;border:1px solid rgba(0,0,0,0.04);">'
+            ]
 
-            # 标题（带编号）
-            parts.append(
-                f'<p style="margin:0 0 6px;font-size:15px;font-weight:600;color:#1a2a47;">'
-                f'{title_text}</p>'
-            )
-
-            # 缩略图
+            # 有图片时：左图右文布局
             if img_url:
-                parts.append(_html_img(img_url, item.get("title", "")))
-
-            # 内容摘要（截取前 150 字）
-            content_short = content_text[:150]
-            if len(content_text) > 150:
-                content_short += "…"
-            if content_short:
-                parts.append(
-                    f'<p style="margin:0 0 8px;font-size:14px;color:#444;line-height:1.7;">'
-                    f'{content_short}</p>'
+                card_parts.append(
+                    '<div style="display:flex;gap:14px;align-items:flex-start;">'
+                    f'<div style="flex-shrink:0;width:120px;height:90px;border-radius:10px;overflow:hidden;'
+                    f'background:#eee;">'
+                    f'<img src="{_html_escape(img_url)}" alt="{title_text}" '
+                    f'style="width:100%;height:100%;object-fit:cover;display:block;" '
+                    f'onerror="this.parentElement.innerHTML=\'<div style=width:120px;height:90px;background:linear-gradient(135deg,{colors["bar"]}33,{colors["bar"]}11);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:28px;>{emoji}</div>\'"/></div>'
+                    '<div style="flex:1;min-width:0;">'
+                    f'<p style="margin:0 0 6px;font-size:15px;font-weight:600;color:#1a2a47;line-height:1.4;">{title_text}</p>'
                 )
 
-            # 底部：来源 + 原文链接（缩短）
-            meta_parts_inner = []
-            if source_text:
-                meta_parts_inner.append(
-                    f'<span style="font-size:12px;color:#8a9bb5;">{source_text}</span>'
-                )
-            if item_url:
-                meta_parts_inner.append(
-                    f'<a href="{_html_escape(item_url)}" style="font-size:12px;color:#1a6b9e;'
-                    f'text-decoration:none;border-bottom:1px solid #c8daf0;">'
-                    f'📎 {_html_escape(short_link)}</a>'
-                )
-            if meta_parts_inner:
-                parts.append(
-                    f'<p style="margin:0;display:flex;gap:12px;'
-                    f'align-items:center;">{" · ".join(meta_parts_inner)}</p>'
-                )
+                # 内容摘要
+                content_short = content_text[:100]
+                if len(content_text) > 100:
+                    content_short += "…"
+                if content_short:
+                    card_parts.append(
+                        f'<p style="margin:0 0 6px;font-size:13px;color:#666;line-height:1.6;">{content_short}</p>'
+                    )
 
-            # ---- 卡片结束 ----
-            parts.append("</div>")
+                # 底部元信息
+                meta_parts = []
+                if source_text:
+                    meta_parts.append(
+                        f'<span style="font-size:11px;color:#aaa;">{source_text}</span>'
+                    )
+                if item_url:
+                    meta_parts.append(
+                        f'<a href="{_html_escape(item_url)}" style="font-size:11px;color:{colors["bar"]};'
+                        f'text-decoration:none;">🔗 阅读原文</a>'
+                    )
+                if meta_parts:
+                    card_parts.append(
+                        f'<p style="margin:0;display:flex;gap:10px;align-items:center;">'
+                        f'{" · ".join(meta_parts)}</p>'
+                    )
 
-    # ===== ✨ 明日关注 =====
-    parts.append('<div style="height:1px;background:linear-gradient(90deg,transparent,#dce3f5,transparent);margin:20px 0 16px;"></div>')
-    parts.append('<p style="font-weight:bold;font-size:15px;margin:0 0 8px;color:#0d3b66;">✨ 明日关注</p>')
-    if attention_text:
-        parts.append(f'<p style="margin:0 0 16px;font-size:14px;color:#555;line-height:1.7;">{_html_escape(attention_text)}</p>')
-    else:
-        parts.append('<p style="margin:0 0 16px;font-size:14px;color:#555;line-height:1.7;">明日持续关注园区无人车招标及落地动态</p>')
+                card_parts.append('</div></div>')  # 结束 flex, 结束 card
+            else:
+                # 无图片：纯文字卡片
+                card_parts.append(
+                    f'<p style="margin:0 0 6px;font-size:15px;font-weight:600;color:#1a2a47;line-height:1.4;">{title_text}</p>'
+                )
+                content_short = content_text[:120]
+                if len(content_text) > 120:
+                    content_short += "…"
+                if content_short:
+                    card_parts.append(
+                        f'<p style="margin:0 0 8px;font-size:13px;color:#666;line-height:1.6;">{content_short}</p>'
+                    )
+                meta_parts = []
+                if source_text:
+                    meta_parts.append(
+                        f'<span style="font-size:11px;color:#aaa;">{source_text}</span>'
+                    )
+                if item_url:
+                    meta_parts.append(
+                        f'<a href="{_html_escape(item_url)}" style="font-size:11px;color:{colors["bar"]};'
+                        f'text-decoration:none;">🔗 阅读原文</a>'
+                    )
+                if meta_parts:
+                    card_parts.append(
+                        f'<p style="margin:0;display:flex;gap:10px;align-items:center;">'
+                        f'{" · ".join(meta_parts)}</p>'
+                    )
+
+            card_parts.append("</div>")
+            parts.extend(card_parts)
+
+    # ===== 明日关注 =====
+    parts.append(
+        '<div style="background:linear-gradient(135deg,#f0f4fa,#e8eef6);border-radius:12px;padding:16px 18px;margin:20px 0 16px;border-left:4px solid #0d3b66;">'
+        '<p style="margin:0 0 6px;font-weight:bold;font-size:15px;color:#0d3b66;">✨ 明日关注</p>'
+        f'<p style="margin:0;font-size:14px;color:#555;line-height:1.7;">{_html_escape(attention_text) if attention_text else "明日持续关注园区无人车招标及落地动态"}</p>'
+        '</div>'
+    )
 
     # ===== 结尾话术 =====
     parts.append(
-        f'<div style="height:1px;background:linear-gradient(90deg,transparent,#dce3f5,transparent);margin:0 0 14px;"></div>'
-    )
-    parts.append(
-        f'<p style="margin:0;font-size:13px;color:#7a8ba8;text-align:center;line-height:1.6;">'
-        f'{_html_escape(closing_options[closing_idx])}</p>'
+        '<div style="border-top:1px solid #e8ecf0;margin:10px 0 0;padding:14px 0 0;text-align:center;">'
+        f'<p style="margin:0;font-size:12px;color:#aaa;line-height:1.6;">{_html_escape(closing_options[closing_idx])}</p>'
+        '</div>'
     )
 
     parts.append("</section>")
     return "\n".join(parts)
-
-
-def build_report_text(news_items: list, template: dict, attention_text: str = "明日持续关注园区无人车招标及落地动态") -> str:
-    def format_line(text: str) -> str:
-        return normalize_text(text)
-
-    date_text = datetime.now().strftime("%Y年%m月%d日")
-    highlights = " / ".join([item["title"] for item in news_items[:3]]) or "今日园区无人车资讯"
-    title = template["title_format"].format(date=date_text, highlights=highlights)
-    lines = [title, "", "聚焦园区无人车垂直领域，每日汇总政策、落地、招标、技术核心资讯，精准覆盖园区接驳、巡检、配送、环卫等场景，助力从业者快速掌握行业动态～", "", f"### {template['summary_title']}"]
-
-    for index, item in enumerate(news_items[:3], start=1):
-        lines.append(f"{index}. {item['title']}")
-    lines.append("")
-
-    grouped = {category: [] for category in CATEGORY_ORDER}
-    for item in news_items:
-        grouped.setdefault(item.get("category", CATEGORY_ORDER[-1]), []).append(item)
-
-    # Map section titles (keys) to category keys (values) for the first 4 categories
-    category_section_map = {
-        "政策动态": template["policy_title"],
-        "企业落地": template["landing_title"],
-        "招标采购": template["procurement_title"],
-        "技术动态": template["tech_title"],
-    }
-    displayed = set()
-    for category_key, section_name in category_section_map.items():
-        items = grouped.get(category_key, [])
-        if not items:
-            continue
-        displayed.add(category_key)
-        lines.append(f"### {section_name}")
-        for num, item in enumerate(items, start=1):
-            lines.append(f"{num}. {item['title']} \n{item['content']} 来源：{item['source']}")
-        lines.append("")
-
-    # Remaining categories not yet displayed (e.g. 行业观点/海外资讯)
-    for category_key in CATEGORY_ORDER:
-        if category_key in displayed:
-            continue
-        items = grouped.get(category_key, [])
-        if not items:
-            continue
-        lines.append(f"### {category_key}")
-        for num, item in enumerate(items, start=1):
-            lines.append(f"{num}. {item['title']} \n{item['content']} 来源：{item['source']}")
-        lines.append("")
-
-    lines.append(f"### {template['follow_title']}")
-    lines.append(attention_text)
-    lines.append("")
-    lines.append(template["closing_paragraph"])
-    return "\n\n".join(lines)
-
-
-def build_report_html(news_items: list, template: dict, attention_text: str = "明日持续关注园区无人车招标及落地动态") -> str:
-    text = build_report_text(news_items, template, attention_text)
-    html_parts = ['<div style="font-family: Arial, sans-serif; line-height: 1.8; color: #222; background:#fff; padding:20px; border-radius:8px; max-width: 680px; margin: 0 auto;">']
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("### "):
-            html_parts.append(f'<h3 style="margin: 20px 0 10px; font-size: 16px; color: #0d3b66;">{stripped[4:]}</h3>')
-        elif stripped.startswith("## "):
-            html_parts.append(f'<h2 style="margin: 24px 0 12px; font-size: 20px; color: #0d3b66;">{stripped[3:]}</h2>')
-        elif stripped and stripped[0].isdigit() and ". " in stripped[:4]:
-            html_parts.append(f'<p style="margin: 6px 0; color:#222;">{stripped}</p>')
-        elif stripped == "":
-            html_parts.append('<br />')
-        else:
-            html_parts.append(f'<p style="margin: 8px 0; color:#222;">{stripped}</p>')
-    html_parts.append('</div>')
-    return "\n".join(html_parts)

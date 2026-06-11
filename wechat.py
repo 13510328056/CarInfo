@@ -3,10 +3,12 @@
 import io
 import json
 import os
+import re
 import struct
 import time
 import zlib
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -14,6 +16,10 @@ import requests
 _token_cache: dict = {"token": None, "expires_at": 0}
 # 内存中缓存的 thumb_media_id
 _thumb_cache: dict = {"media_id": None, "expires_at": 0}
+# 内存中缓存的已上传图片 URL（外链 → 微信 CDN URL）
+_image_url_cache: dict = {}
+# 缓存上传失败的 URL，避免重复尝试
+_failed_image_urls: set = set()
 
 WECHAT_API_BASE = "https://api.weixin.qq.com/cgi-bin"
 
@@ -100,6 +106,122 @@ def _upload_thumb(appid: str, appsecret: str) -> str:
         return data["media_id"]
 
     raise RuntimeError(f"上传缩略图失败: {data.get('errmsg', str(data))}")
+
+
+# ---------------------------------------------------------------------------
+# 内容图片上传：将正文中的外网图片上传到微信 CDN，防止外链被屏蔽
+# ---------------------------------------------------------------------------
+
+def _download_image(img_url: str, timeout: int = 10) -> tuple:
+    """
+    下载外部图片，返回 (bytes, content_type)。
+    失败时返回 (None, None)。
+    """
+    if not img_url or not img_url.startswith("http"):
+        return None, None
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": urlparse(img_url).scheme + "://" + urlparse(img_url).netloc,
+        }
+        resp = requests.get(img_url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "")
+        if not content_type.startswith("image/"):
+            return None, None
+        return resp.content, content_type
+    except Exception:
+        return None, None
+
+
+def _upload_image_to_wechat(appid: str, appsecret: str, img_data: bytes, filename: str = "pic.jpg") -> str:
+    """
+    将图片数据上传到微信的 'media/uploadimg' 接口（用于图文内容正文插图）。
+    返回微信 CDN URL，失败返回空字符串。
+    """
+    token = _get_access_token(appid, appsecret)
+    try:
+        files = {"media": (filename, img_data, "image/jpeg")}
+        resp = requests.post(
+            f"{WECHAT_API_BASE}/media/uploadimg",
+            params={"access_token": token},
+            files=files,
+            timeout=20,
+        )
+        data = resp.json()
+        if "url" in data:
+            return data["url"]
+        print(f"[wechat] uploadimg 失败: {data.get('errmsg', str(data))}")
+        return ""
+    except Exception as e:
+        print(f"[wechat] uploadimg 异常: {e}")
+        return ""
+
+
+def upload_image_for_content(appid: str, appsecret: str, external_url: str) -> str:
+    """
+    将外部图片 URL 转换为微信 CDN URL（上传到微信服务器）。
+    带缓存：同一 URL 不会重复上传。
+    """
+    if not external_url or not external_url.startswith("http"):
+        return external_url
+
+    # 已经是微信 CDN 的 URL，无需处理
+    parsed = urlparse(external_url)
+    if "qpic.cn" in parsed.netloc or "mmbiz" in parsed.netloc:
+        return external_url
+
+    # 查缓存
+    if external_url in _image_url_cache:
+        return _image_url_cache[external_url]
+
+    # 之前上传失败的，不再重试
+    if external_url in _failed_image_urls:
+        return external_url
+
+    # 下载
+    img_data, content_type = _download_image(external_url)
+    if not img_data:
+        _failed_image_urls.add(external_url)
+        return external_url
+
+    # 从 Content-Type 推断扩展名
+    ext_map = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}
+    ext = ext_map.get(content_type, "jpg")
+    filename = f"pic_{int(time.time())}.{ext}"
+
+    # 上传
+    wx_url = _upload_image_to_wechat(appid, appsecret, img_data, filename)
+    if wx_url:
+        _image_url_cache[external_url] = wx_url
+        return wx_url
+
+    _failed_image_urls.add(external_url)
+    return external_url
+
+
+def replace_images_in_html(appid: str, appsecret: str, html_content: str) -> str:
+    """
+    扫描 HTML 中所有 <img> 标签的 src 和 data-src 属性，
+    将外部图片上传到微信 CDN 并替换 URL，
+    同时将 data-src 转为 src（微信公众号富文本要求用 src）。
+    返回替换后的 HTML。
+    """
+    def _replace_img_attr(match):
+        tag = match.group(0)
+        attr = match.group(1)   # 'src' or 'data-src'
+        old_url = match.group(2)
+
+        new_url = upload_image_for_content(appid, appsecret, old_url)
+        if new_url != old_url:
+            # 把 data-src 也改为 src（微信要求用 src）
+            return tag.replace(f'{attr}="{old_url}"', f'{attr}="{new_url}"')
+        return tag
+
+    # 匹配 <img ... src="..." ...> 和 <img ... data-src="..." ...>
+    pattern = re.compile(r'(src|data-src)="([^"]+)"')
+    processed = pattern.sub(_replace_img_attr, html_content)
+    return processed
 
 
 # ---------------------------------------------------------------------------
