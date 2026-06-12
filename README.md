@@ -154,6 +154,127 @@ data/
 
 备份或迁移只需复制整个 `data/` 目录。
 
+
+## 目标设备 Docker 部署与更新
+
+适用于在一台**没有图形界面、没有 Python 环境、仅安装 Docker** 的目标服务器上部署和更新。
+
+### 首次部署
+
+```bash
+# 1. 安装 Docker（如未安装）
+curl -fsSL https://get.docker.com | sh
+sudo systemctl enable docker && sudo systemctl start docker
+
+# 2. 安装 Docker Compose Plugin（如未安装）
+sudo apt install docker-compose-plugin   # Debian/Ubuntu
+# 或
+sudo dnf install docker-compose-plugin   # CentOS/RHEL
+
+# 3. 克隆项目
+git clone https://github.com/13510328056/CarInfo.git
+cd CarInfo
+
+# 4. 创建数据目录（重要：存放持久化数据）
+mkdir -p data
+
+# 5. 构建并启动（首次约 2-5 分钟）
+docker compose up -d --build
+
+# 6. 验证运行
+docker ps                     # 确认容器状态
+curl http://localhost:5000    # 测试 HTTP 响应
+```
+
+访问 `http://目标设备IP:5000` 即可打开系统页面。
+
+### 从 GitHub 拉取更新
+
+当代码有更新时，在目标设备上执行：
+
+```bash
+cd CarInfo
+
+# 1. 停止当前容器
+docker compose down
+
+# 2. 拉取最新代码
+git pull
+
+# 3. 重新构建并启动
+docker compose up -d --build
+
+# 4. 确认更新成功
+docker compose logs --tail=20
+```
+
+> 如果本地有未提交的修改导致 `git pull` 冲突，可用 `git stash` 暂存后再拉取，拉取完用 `git stash pop` 恢复。
+
+### 日常管理
+
+```bash
+# 查看运行状态
+docker compose ps
+
+# 查看实时日志
+docker compose logs -f
+
+# 查看最近 100 行日志
+docker compose logs --tail=100
+
+# 重启服务
+docker compose restart
+
+# 停止服务
+docker compose down
+```
+
+### 数据持久化
+
+系统数据存储在项目根目录的 `data/` 文件夹中，通过 Docker volume 挂载到容器内：
+
+```yaml
+volumes:
+  - ./data:/app/data
+```
+
+| 文件 | 内容 | 备份建议 |
+|------|------|---------|
+| `data/config.json` | 渠道、关键词、分类、模板、微信配置 | 定期备份 |
+| `data/news.json` | 所有抓取和录入的资讯 | 按需备份 |
+| `data/history.json` | 历史报告存档 | 按需备份 |
+| `data/classifier.pkl` | ML 分类器模型（自动训练） | 不重要 |
+
+**迁移到新设备**：复制整个 `data/` 目录到新项目的相同位置，重启容器即可恢复所有数据。
+
+### 网络与防火墙
+
+如需从其他设备（如手机、同事电脑）访问，确保放行 5000 端口：
+
+```bash
+# Linux (firewalld)
+sudo firewall-cmd --add-port=5000/tcp --permanent
+sudo firewall-cmd --reload
+
+# Linux (iptables)
+sudo iptables -A INPUT -p tcp --dport 5000 -j ACCEPT
+
+# 云服务器（阿里云/腾讯云/AWS）
+# 在云控制台的「安全组」或「防火墙」规则中添加入站 TCP 5000 端口
+```
+
+### 微信公众号 IP 白名单
+
+如需一键发布到公众号，将**部署设备的公网 IP** 添加到微信公众号后台：
+
+1. 查询公网 IP：`curl ifconfig.me`
+2. 登录 [mp.weixin.qq.com](https://mp.weixin.qq.com/)
+3. 进入 **设置 → 安全中心 → IP 白名单**
+4. 添加查询到的公网 IP
+5. 点击保存
+
+> ⚠️ IP 白名单添加后约 **5 分钟生效**。如果服务器公网 IP 发生变化（如重启路由器），需重新添加。
+
 ---
 
 ## 微信公众号配置
